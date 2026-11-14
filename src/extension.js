@@ -3,13 +3,18 @@ const vscode = require('vscode');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
+const { setInterval, clearInterval } = require('node:timers');
 const { WorkspaceStore, digest } = require('./workspace');
-const { CopilotBrowser } = require('./browser');
+const { CopilotBrowser, validateCopilotUrl } = require('./browser');
 const { CodingAgent } = require('./agent');
 const { CommandRunner } = require('./terminal');
 const { requiresReview } = require('./policy');
 const { renderWebview } = require('./view');
 const { inspectProject } = require('./project');
+const { requestsEdits } = require('./project');
+const { decorate } = require('./markdown');
+const { mergeHistory } = require('./web-history');
+const { conversationUrl } = require('./web-history');
 
 class AgentView {
   constructor(context) {
@@ -17,6 +22,10 @@ class AgentView {
     this.sessions = context.workspaceState.get('sessions', []);
     this.sessionId = context.workspaceState.get('activeSession');
     this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
+    this.webUrl = this.sessions.find(session => session.id === this.sessionId)?.webUrl;
+    this.newWebChat = this.sessions.find(session => session.id === this.sessionId)?.newWebChat || false;
+    this.webPages = new Map();
+    this.modelChoices = [];
     this.attachments = [];
     this.checkpoints = [];
     this.changedFiles = new Map();
@@ -28,6 +37,8 @@ class AgentView {
     this.previews = new Map();
     this.output = vscode.window.createOutputChannel('M365 Code Agent');
     this.config = () => vscode.workspace.getConfiguration('m365Agent');
+    this.syncTimer = setInterval(() => { this.syncWeb(false).catch(() => {}); }, 5000);
+    this.syncTimer.unref();
   }
   post(event) {
     if (['message', 'tool'].includes(event.type)) {
@@ -37,18 +48,18 @@ class AgentView {
       this.events = this.events.slice(-100);
       this.saveSession();
     }
-    this.view?.webview.postMessage(event);
+    this.view?.webview.postMessage(decorate(event));
     if (event.type === 'status') this.output.appendLine(event.text);
   }
   saveSession() {
     if (!this.sessionId) this.sessionId = crypto.randomUUID();
-    const session = { id: this.sessionId, title: this.events.find(event => event.role === 'user')?.text.slice(0, 70) || '새 대화', updated: Date.now(), events: this.events };
+    const session = { id: this.sessionId, title: this.events.find(event => event.role === 'user')?.text.slice(0, 70) || '새 대화', updated: Date.now(), events: this.events, webUrl: this.webUrl, newWebChat: Boolean(this.newWebChat) };
     this.sessions = [session, ...this.sessions.filter(item => item.id !== session.id)].slice(0, 20);
     this.context.workspaceState.update('sessions', this.sessions);
     this.context.workspaceState.update('activeSession', this.sessionId);
   }
   state() {
-    return { type: 'history', events: this.events, running: this.starting || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo };
+    return { type: 'history', events: this.events.map(decorate), running: this.starting || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -106,7 +117,7 @@ class AgentView {
       this.browser = new CopilotBrowser({
         profile, url: config.get('copilotUrl'), channel: config.get('browserChannel'),
         composerSelector: config.get('composerSelector'), sendButtonSelector: config.get('sendButtonSelector'),
-        responseSelector: config.get('responseSelector'), timeoutSeconds: config.get('responseTimeoutSeconds')
+        responseSelector: config.get('responseSelector'), timeoutSeconds: config.get('responseTimeoutSeconds'), loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600), modelButtonSelector: config.get('modelButtonSelector'), onConversation: info => { if (info.restorable) { this.webUrl = info.url; this.saveSession(); this.post({ type: 'webConversation', url: info.url }); } }
       });
     }
     try { await this.browser.connect(); }
@@ -125,6 +136,8 @@ class AgentView {
     this.saveSession();
     this.sessionId = crypto.randomUUID();
     this.events = [];
+    this.webUrl = undefined;
+    this.newWebChat = true;
     this.attachments = [];
     this.saveSession();
     this.view?.webview.postMessage(this.state());
@@ -136,8 +149,57 @@ class AgentView {
     if (!selected) return;
     this.sessionId = selected.session.id;
     this.events = selected.session.events;
+    this.webUrl = selected.session.webUrl;
+    const linked = this.webPages.get(this.sessionId);
+    this.newWebChat = !this.webUrl && (!linked || linked.isClosed());
+    if (linked && !linked.isClosed() && (!this.webUrl || conversationUrl(linked.url()).url === this.webUrl)) this.browser.page = linked;
+    else if (this.webUrl) { const browser = await this.ensureBrowser(); browser.page = await browser.context.newPage(); await browser.page.goto(validateCopilotUrl(this.webUrl), { waitUntil: 'domcontentloaded' }); this.webPages.set(this.sessionId, browser.page); }
     this.saveSession();
     this.view?.webview.postMessage(this.state());
+  }
+  async syncWeb(manual = true) {
+    if (this.starting || this.agent?.running || this.syncing) return;
+    if (this.newWebChat) { if (manual) this.post({ type: 'status', text: '이 대화는 첫 요청을 보내면 새 웹 대화와 연결됩니다.' }); return; }
+    if (!this.browser?.page || this.browser.page.isClosed() || !this.browser.readConversation) { if (manual) throw new Error('먼저 Copilot을 연결하고 웹 대화를 여세요.'); return; }
+    this.syncing = true;
+    try {
+      if (!manual && !this.view?.visible) return;
+      const snapshot = await this.browser.readConversation();
+      if (this.starting || this.agent?.running) return;
+      if (this.webUrl && !snapshot.restorable) { if (manual) this.post({ type: 'status', text: '웹 대화 주소가 아직 정해지지 않았습니다. 웹에서 대화를 시작한 뒤 동기화하세요.' }); return; }
+      const previousUrl = this.webUrl;
+      if (snapshot.restorable && this.webUrl !== snapshot.url) {
+        this.webPages.delete(this.sessionId);
+        const session = this.sessions.find(session => session.webUrl === snapshot.url);
+        if (session) { this.sessionId = session.id; this.events = session.events; }
+        else if (this.webUrl) { this.saveSession(); this.sessionId = crypto.randomUUID(); this.events = []; }
+        this.webUrl = snapshot.url;
+      }
+      const merged = mergeHistory(this.events, snapshot.messages);
+      const changed = JSON.stringify(merged) !== JSON.stringify(this.events);
+      this.events = merged;
+      if (changed || previousUrl !== this.webUrl) this.saveSession();
+      this.webPages.set(this.sessionId, this.browser.page);
+      if (changed || previousUrl !== this.webUrl || manual) this.view?.webview.postMessage(this.state());
+      if (manual) this.post({ type: 'status', text: snapshot.messages.length ? `웹 대화 동기화 · ${snapshot.messages.length}개 메시지 확인` : '웹 대화 메시지 영역을 읽지 못했습니다. 현재 로컬 기록은 유지했습니다.' });
+    } finally { this.syncing = false; }
+  }
+  async refreshModels() {
+    if (this.starting || this.agent?.running) return;
+    this.starting = true; this.stopRequested = false; this.post({ type: 'busy' });
+    try {
+      const browser = await this.ensureBrowser(); browser.cancelled = false;
+      this.modelChoices = await browser.models(text => this.post({ type: 'status', text }));
+      this.post({ type: 'models', choices: this.modelChoices, selected: this.selectedModel });
+    } finally { this.starting = false; this.post({ type: 'idle' }); }
+  }
+  async chooseModel(id) {
+    if (this.starting || this.agent?.running) return;
+    if (!id) { this.selectedModel = ''; return; }
+    this.starting = true; this.post({ type: 'busy' });
+    try { const browser = await this.ensureBrowser(); browser.cancelled = false; const label = await browser.selectModel(id, text => this.post({ type: 'status', text })); this.selectedModel = id; this.post({ type: 'models', choices: this.modelChoices, selected: id }); this.post({ type: 'status', text: 'M365 모델 선택: ' + label }); }
+    catch (error) { this.post({ type: 'models', choices: this.modelChoices, selected: this.selectedModel }); throw error; }
+    finally { this.starting = false; this.post({ type: 'idle' }); }
   }
   async attachFiles() {
     if (this.starting || this.agent?.running) return;
@@ -167,6 +229,7 @@ class AgentView {
     this.runner.stop();
     if (this.pending) { const pending = this.pending; this.pending = null; pending.resolve(false); }
     if (this.agent) await this.agent.stop();
+    if (this.browser && !this.agent?.running) await this.browser.stop();
     this.post({ type: 'status', text: '중지 요청됨. 이후 응답은 파일에 적용하지 않습니다.' });
   }
   async start(message) {
@@ -202,11 +265,27 @@ class AgentView {
       }
       if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
       let task = message.task;
-      let mode = ['ask', 'plan', 'agent'].includes(message.mode) ? message.mode : 'agent';
+      let mode = requestsEdits(task, 'agent') || /테스트.*(실행|돌려)|빌드.*(실행|해줘)|\brun\b.*\b(test|build)/i.test(task) ? 'agent' : /계획|\bplan\b/i.test(task) ? 'plan' : 'ask';
       if (/^\/plan(?:\s|$)/i.test(task)) { mode = 'plan'; task = task.replace(/^\/plan\s*/i, '') || '현재 프로젝트의 개선 계획을 세워줘.'; }
       if (/^\/review(?:\s|$)/i.test(task)) { mode = 'ask'; task = '버그와 회귀 위험을 중심으로 코드를 검토하고 파일과 근거를 알려줘. ' + task.replace(/^\/review\s*/i, ''); }
       if (/^\/test(?:\s|$)/i.test(task)) { mode = 'agent'; task = '프로젝트의 테스트 방법을 확인하고 필요한 테스트를 실행해서 실제 결과를 알려줘. ' + task.replace(/^\/test\s*/i, ''); }
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
+      this.saveSession();
+      if (browser.waitForComposer && browser.context) {
+        browser.cancelled = false;
+        await browser.waitForComposer(text => this.post({ type: 'status', text }));
+        if (this.stopRequested) throw new Error('작업을 중지했습니다.');
+        const linked = this.webPages.get(this.sessionId);
+        if (linked && !linked.isClosed() && (!this.webUrl || conversationUrl(linked.url()).url === this.webUrl)) browser.page = linked;
+        else if (this.webUrl) await browser.page.goto(validateCopilotUrl(this.webUrl), { waitUntil: 'domcontentloaded' });
+        else if (this.newWebChat) {
+          browser.page = await browser.context.newPage(); await browser.page.goto(validateCopilotUrl(browser.options.url || this.config().get('copilotUrl')), { waitUntil: 'domcontentloaded' });
+          await browser.waitForComposer(text => this.post({ type: 'status', text })); await browser.newChat(); this.newWebChat = false;
+        }
+        this.webPages.set(this.sessionId, browser.page);
+        const snapshot = await browser.readConversation();
+        if (!this.webUrl || snapshot.url === this.webUrl) { this.events = mergeHistory(this.events, snapshot.messages); if (snapshot.restorable) this.webUrl = snapshot.url; this.saveSession(); this.view?.webview.postMessage(this.state()); }
+      }
       this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
         mode, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
         maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
@@ -217,6 +296,7 @@ class AgentView {
     finally {
       this.starting = false;
       this.post({ type: 'idle' });
+      this.post({ type: 'runResult', clientRequestId: message.clientRequestId, task: message.task, success: !errorMessage });
       this.post({ type: 'status', text: errorMessage || '완료 · 다음 요청을 이어서 입력하세요.', error: Boolean(errorMessage) });
     }
   }
@@ -321,6 +401,11 @@ class AgentView {
   async handle(message) {
     if (!message || typeof message.type !== 'string') return;
     if (message.type === 'ready') { this.view.webview.postMessage(this.state()); return; }
+    if (message.type === 'syncWeb') return this.syncWeb();
+    if (message.type === 'refreshModels') return this.refreshModels();
+    if (message.type === 'selectModel') return this.chooseModel(message.id);
+    if (message.type === 'copyCode' && typeof message.text === 'string' && message.text.length <= 1024 * 1024) return vscode.env.clipboard.writeText(message.text);
+    if (message.type === 'openLink' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) return vscode.env.openExternal(vscode.Uri.parse(message.url));
     if (message.type === 'checkWorkspace') return this.checkWorkspace();
     if (message.type === 'history') return this.showHistory();
     if (message.type === 'attach') return this.attachFiles();
@@ -345,7 +430,7 @@ class AgentView {
       return vscode.commands.executeCommand('vscode.diff', makeUri('-old'), makeUri('-new'), 'M365 Agent · 변경 미리보기');
     }
   }
-  async dispose() { await this.stop(); if (this.browser) await this.browser.close(); this.output.dispose(); }
+  async dispose() { clearInterval(this.syncTimer); await this.stop(); if (this.browser) await this.browser.close(); this.output.dispose(); }
 }
 
 function activate(context) {
@@ -361,6 +446,8 @@ function activate(context) {
   command('m365Agent.stop', () => provider.stop());
   command('m365Agent.diagnostics', () => provider.diagnostics());
   command('m365Agent.checkWorkspace', () => provider.checkWorkspace());
+  command('m365Agent.syncWeb', () => provider.syncWeb());
+  command('m365Agent.refreshModels', () => provider.refreshModels());
   context.subscriptions.push({ dispose: () => { provider.dispose().catch(() => {}); } });
   return { provider };
 }

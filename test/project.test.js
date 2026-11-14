@@ -85,3 +85,11 @@ test('UTF-16 BOM source files can be read without being mistaken for binary', as
   await fs.writeFile(path.join(root, 'Example.cs'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, 'utf16le')]));
   assert.equal((await store.readFile('Example.cs')).content, content);
 });
+
+test('natural-language edit intent recognizes creation and keeps explanation/planning read-only', () => {
+  const { requestsEdits } = require('../src/project');
+  assert.equal(requestsEdits('빈 배열은 null로 반환하고 회귀 테스트도 생성해줘.', 'agent'), true);
+  assert.equal(requestsEdits('수정하지 말고 설명해줘.', 'agent'), false);
+  assert.equal(requestsEdits('구현 계획을 알려줘.', 'agent'), false);
+  assert.equal(requestsEdits('explain and fix the bug', 'agent'), true);
+});

@@ -44,6 +44,6 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
 }
 
 function requestsEdits(task, mode) {
-  return mode === 'agent' && !/수정하지|변경하지|변경 없이|수정 방법|수정 계획|do not (?:edit|change)|explain|how to/i.test(task) && /수정|고쳐|변경해|리팩터|구현|추가해|만들어|작성해|\b(fix|edit|modify|implement|refactor|create|update)\b/i.test(task);
+  return mode === 'agent' && !/수정하지|변경하지|변경 없이|수정 방법|(?:수정|구현|변경|개발)\s*계획|do not (?:edit|change)|explain (?:how|why)|how to/i.test(task) && /수정|고쳐|변경해|바꿔|리팩터|구현|추가해|만들어|작성해|생성해|적용해|\b(fix|edit|modify|implement|refactor|create|generate|update|apply|add)\b/i.test(task);
 }
 module.exports = { inspectProject, requestsEdits, rankFiles };

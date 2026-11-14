@@ -1,9 +1,12 @@
 'use strict';
-const { parseReply } = require('./protocol');
+const { parseReply, replyIdentity } = require('./protocol');
 const { normalizeDraft, matchesPrompt, readComposer, promptLimitError, isAgentProtocolDraft } = require('./composer');
 const { scanResponses, defaultResponses } = require('./responses');
+const { conversationUrl } = require('./web-history');
 
 const allowedHosts = new Set(['m365.cloud.microsoft', 'copilot.cloud.microsoft', 'www.microsoft365.com', 'microsoft365.com', 'www.office.com', 'office.com']);
+const authHosts = new Set(['login.microsoftonline.com', 'login.microsoft.com', 'login.live.com', 'account.microsoft.com']);
+function isLoginUrl(value) { try { const url = new URL(value); return url.protocol === 'https:' && authHosts.has(url.hostname); } catch { return false; } }
 function validateCopilotUrl(value) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || !allowedHosts.has(url.hostname) || url.username || url.password || (url.port && url.port !== '443')) throw new Error('회사 M365 Copilot의 HTTPS 주소만 연결할 수 있습니다.');
@@ -30,7 +33,7 @@ class CopilotBrowser {
     return this.connecting;
   }
   async openConnection() {
-    if (this.context) {
+    if (this.context && (!this.page || this.page.isClosed())) {
       const pages = this.context.pages().filter(page => !page.isClosed());
       const copilot = pages.filter(page => { try { validateCopilotUrl(page.url()); return true; } catch { return false; } });
       if (copilot.length) this.page = copilot.at(-1);
@@ -68,16 +71,41 @@ class CopilotBrowser {
     }
     throw new Error('Copilot 입력창을 찾지 못했습니다. 전용 Edge 창에서 로그인하고 대화 화면을 연 뒤 다시 연결하세요. 화면 구조가 달라졌다면 입력창 CSS 선택자를 설정하세요.');
   }
-  async waitForComposer() {
-    const deadline = Date.now() + 10000;
+  async waitForComposer(onStatus = () => {}) {
+    const deadline = Date.now() + (this.options.loginTimeoutMs ?? (this.options.loginTimeoutSeconds || 600) * 1000);
+    let handle, readySince = 0, lastStatus = '';
+    const report = text => { if (text !== lastStatus) { onStatus(text); lastStatus = text; } };
+    try {
     while (true) {
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      try { return await this.getComposer(); }
-      catch (error) {
-        if (Date.now() >= deadline || this.page.isClosed()) throw error;
-        await this.page.waitForTimeout(250);
+      if (!this.context || !this.context.pages().some(page => !page.isClosed())) throw new Error('Copilot 브라우저가 닫혔습니다. 요청은 전송하지 않았습니다.');
+      if (Date.now() >= deadline) throw new Error('로그인·입력창 준비 대기 시간이 끝났습니다. 요청은 전송하지 않았으며 입력창에서 다시 시도할 수 있습니다.');
+      let candidate;
+      for (const page of [this.page, ...[...this.context.pages()].reverse()].filter((page, index, all) => page && !page.isClosed() && all.indexOf(page) === index)) {
+        try { validateCopilotUrl(page.url()); } catch { continue; }
+        this.page = page;
+        try { candidate = await this.getComposer(); break; } catch { /* Login redirect or app hydration. */ }
       }
+      if (candidate) {
+        if (handle && this.readyPage === this.page && this.readyFrame === candidate.frame && await handle.evaluate(element => element.isConnected).catch(() => false)) {
+          if (Date.now() - readySince >= (this.options.composerStableMs ?? 900)) return candidate;
+        } else {
+          await handle?.dispose();
+          handle = await candidate.locator.elementHandle(); readySince = Date.now();
+          this.readyPage = this.page; this.readyFrame = candidate.frame;
+        }
+        report('Copilot 입력창 준비 중 · 첫 요청을 보관하고 있습니다…');
+      } else {
+        await handle?.dispose(); handle = null; readySince = 0;
+        const pages = this.context.pages().filter(page => !page.isClosed());
+        if (pages.some(page => isLoginUrl(page.url()))) report('회사 계정 로그인·MFA 대기 중 · 완료되면 첫 요청을 자동으로 보냅니다.');
+        else {
+          report('Copilot 대화 화면 대기 중 · 로그인과 화면 로딩이 끝나면 자동으로 계속합니다…');
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, this.options.readinessPollMs ?? 250));
     }
+    } finally { await handle?.dispose().catch(() => {}); }
   }
   async diagnostics() {
     await this.connect();
@@ -150,7 +178,9 @@ class CopilotBrowser {
       throw promptLimitError(this.promptCharacterLimit, prompt.length);
     }
     this.lastSend.stage = 'input-mismatch';
-    throw new Error(`Copilot 편집기가 입력 내용을 변경했습니다 (요청 ${prompt.length.toLocaleString()}자 / 확인 ${snapshot.text.length.toLocaleString()}자). 길이 제한으로 단정하지 않았으며 전송하지 않았습니다. ⋯ 연결 진단에서 입력 상태를 확인하세요.`);
+    const error = new Error(`Copilot 편집기가 입력 내용을 변경했습니다 (요청 ${prompt.length.toLocaleString()}자 / 확인 ${snapshot.text.length.toLocaleString()}자). 길이 제한으로 단정하지 않았으며 전송하지 않았습니다. ⋯ 연결 진단에서 입력 상태를 확인하세요.`);
+    if (!actual) { error.code = 'COMPOSER_REINITIALIZED'; error.notSubmitted = true; }
+    throw error;
   }
   async writePrompt(locator, prompt) {
     const initial = await readComposer(locator);
@@ -206,8 +236,10 @@ class CopilotBrowser {
     let submitted = false;
     try {
       await this.connect();
+      let baseline;
+      for (let attempt = 0; attempt < 3; attempt++) {
+      const { locator, frame } = await this.waitForComposer(onStatus);
       validateCopilotUrl(this.page.url());
-      const { locator, frame } = await this.waitForComposer();
       const draft = (await readComposer(locator)).text;
       if (await this.generationActive()) throw new Error('Copilot이 다른 응답을 생성 중입니다. 완료 후 다시 실행하세요.');
       if (draft.trim()) {
@@ -216,12 +248,19 @@ class CopilotBrowser {
         onStatus('이전 버전이 남긴 자동화 요청 초안을 정리했습니다. 새 요청을 준비합니다.');
       }
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      const baseline = new Set(await this.responseCandidates(id, prompt));
+      baseline = new Set(await this.responseCandidates(id, prompt));
       onStatus('Copilot에 요청을 보내고 있습니다…');
+      try {
       await this.writePrompt(locator, prompt);
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
       await this.submitPrompt(locator, frame, prompt, baseline, id);
       submitted = true;
+      break;
+      } catch (error) {
+        if (attempt === 2 || error.code !== 'COMPOSER_REINITIALIZED' || error.notSubmitted !== true || ['clicked', 'unconfirmed'].includes(this.lastSend?.stage)) throw error;
+        onStatus('로그인 후 입력창이 다시 준비되는 중입니다. 보관한 요청을 자동으로 이어 보냅니다…');
+      }
+      }
       this.lastResponse = { stage: 'waiting' };
       onStatus('전송 확인됨 · Copilot 응답을 기다리고 있습니다…');
       const deadline = Date.now() + (this.options.timeoutSeconds || 240) * 1000;
@@ -236,7 +275,7 @@ class CopilotBrowser {
         for (const text of blocks) {
           if (baseline.has(text) || !text.includes(id)) continue;
           matching++;
-          try { const value = parseReply(text, id); parsed.set(JSON.stringify(value), value); }
+          try { const value = parseReply(text, id); parsed.set(replyIdentity(value), value); }
           catch (error) { parseError = error.code || 'REPLY_NOT_FOUND'; ambiguous ||= error.code === 'AMBIGUOUS_REPLY'; }
         }
         if (parsed.size > 1 || ambiguous) throw new Error('현재 요청의 서로 다른 JSON 응답이 여러 개 감지되어 적용하지 않았습니다.');
@@ -245,9 +284,9 @@ class CopilotBrowser {
         const stage = found ? 'json-confirmed' : matching ? 'json-incomplete' : 'waiting';
         this.lastResponse = { stage, ...this.responseScan, matchingRequestId: matching, parsed: Boolean(found), generating, parseError: found ? null : parseError || null };
         if (found) {
-          const signature = JSON.stringify(found);
+          const signature = replyIdentity(found);
           if (signature !== candidateText) { candidateText = signature; stableSince = Date.now(); }
-          if (Date.now() - stableSince >= (this.options.responseStableMs ?? 2500) && !generating) { this.lastResponse.stage = 'complete'; return found; }
+          if (Date.now() - stableSince >= (this.options.responseStableMs ?? 2500) && !generating) { this.lastResponse.stage = 'complete'; this.options.onConversation?.(this.conversationInfo()); return found; }
         } else { candidateText = ''; stableSince = 0; }
         if (stage !== lastStage) {
           onStatus(found ? '현재 요청의 JSON 확인됨 · 응답 완료 확인 중…' : matching ? '현재 요청 ID가 있는 답변 발견 · JSON 수집 중…' : 'Copilot 답변 영역을 찾고 있습니다…');
@@ -278,6 +317,10 @@ class CopilotBrowser {
       }
     } catch { /* Local cancellation still prevents applying subsequent results. */ }
   }
+  conversationInfo() { validateCopilotUrl(this.page.url()); return conversationUrl(this.page.url()); }
+  async models(onStatus) { return require('./web-controls').listModels(this, onStatus); }
+  async selectModel(id, onStatus) { return require('./web-controls').selectModel(this, id, onStatus); }
+  async readConversation() { validateCopilotUrl(this.page.url()); return require('./web-controls').readConversation(this); }
   async close() {
     this.cancelled = true;
     if (this.context) await this.context.close();

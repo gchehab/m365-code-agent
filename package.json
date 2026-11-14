@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -74,6 +74,14 @@
       {
         "command": "m365Agent.checkWorkspace",
         "title": "M365 Agent: 프로젝트 읽기·쓰기 점검"
+      },
+      {
+        "command": "m365Agent.syncWeb",
+        "title": "M365 Agent: 현재 웹 대화 동기화"
+      },
+      {
+        "command": "m365Agent.refreshModels",
+        "title": "M365 Agent: 웹 모델 목록 불러오기"
       }
     ],
     "viewsContainers": {
@@ -123,6 +131,18 @@
           "minimum": 30,
           "maximum": 900
         },
+        "m365Agent.loginTimeoutSeconds": {
+          "type": "number",
+          "default": 600,
+          "minimum": 30,
+          "maximum": 1800,
+          "description": "처음 요청을 보관한 채 로그인·MFA와 입력창 준비를 기다릴 시간(초). 준비되면 자동 전송합니다."
+        },
+        "m365Agent.modelButtonSelector": {
+          "type": "string",
+          "default": "",
+          "description": "자동 감지가 실패할 때 지정할 웹 모델 선택 버튼의 CSS 선택자. 실제 메뉴에 표시된 모델만 제공합니다."
+        },
         "m365Agent.maxPromptCharacters": {
           "type": "number",
           "default": 12000,
@@ -130,7 +150,13 @@
           "maximum": 120000,
           "description": "웹에 보낼 요청의 최대 글자 수. 입력창 한도가 더 작으면 전송 전에 문맥을 자동으로 줄입니다."
         },
-        "m365Agent.maxFileSizeMB": { "type": "number", "default": 16, "minimum": 1, "maximum": 128, "description": "로컬에서 읽고 부분 수정할 텍스트 파일의 최대 크기(MB). 웹에는 필요한 범위만 전달합니다." },
+        "m365Agent.maxFileSizeMB": {
+          "type": "number",
+          "default": 16,
+          "minimum": 1,
+          "maximum": 128,
+          "description": "로컬에서 읽고 부분 수정할 텍스트 파일의 최대 크기(MB). 웹에는 필요한 범위만 전달합니다."
+        },
         "m365Agent.commandOutputEncoding": {
           "type": "string",
           "enum": [
@@ -168,6 +194,7 @@
   },
   "dependencies": {
     "ignore": "7.0.14",
+    "markdown-it": "^15.0.3",
     "playwright-core": "1.65.1"
   },
   "devDependencies": {

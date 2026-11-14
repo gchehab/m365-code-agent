@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Keep the first request queued through login/MFA, new authentication tabs and composer hydration. Retry only confirmed pre-submit resets; restore failed tasks without overwriting new drafts.
+- Deduplicate semantically identical JSON across response widgets and key order while rejecting genuinely conflicting actions.
+- Replace the Ask/Plan/Agent picker with natural-language intent routing. Retain read-only analysis and explicit change/command approvals.
+- Read account-visible web model menus, including nested More menus, and apply selections through the web UI.
+- Render assistant Markdown headings, lists, tables and code with copy buttons. Disable raw HTML, script links and remote images.
+- Map local sessions to web conversation URLs. Poll the current rendered web conversation while idle, merge manual web turns without replaying actions, and reopen linked chats from local history. No full-account archive/deletion synchronization.
+
 ## 0.4.0
 
 - Inspect the workspace locally before the first model request: rank project/source files and send bounded real file reads automatically, without requiring attachments or an initial model tool call.

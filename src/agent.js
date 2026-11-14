@@ -23,7 +23,7 @@ class CodingAgent {
       const files = project.files;
       history.push(project.history);
       if (project.discovered && !project.read) throw new Error('프로젝트 파일 본문을 읽지 못했습니다. 작업 기록의 파일별 오류를 확인하세요. 분석이나 수정이 완료된 것으로 처리하지 않았습니다.');
-      this.emit({ type: 'message', role: 'system', text: `프로젝트 ${require('node:path').basename(this.store.root)} · ${project.discovered}개 파일 발견 · ${project.read}개 본문을 먼저 읽었습니다.${this.mode !== 'agent' ? ' 현재 모드는 읽기 전용입니다. 파일 수정은 Agent 모드에서 요청하세요.' : ''}` });
+      this.emit({ type: 'message', role: 'system', text: `프로젝트 ${require('node:path').basename(this.store.root)} · ${project.discovered}개 파일 발견 · ${project.read}개 본문을 먼저 읽었습니다.${this.mode !== 'agent' ? ' 이번 요청은 분석·계획으로 처리하며 파일을 수정하지 않습니다.' : ''}` });
       for (let round = 1; round <= this.maxRounds; round++) {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         const id = newId();
@@ -68,7 +68,7 @@ class CodingAgent {
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit, call.path);
               else if (call.name === 'search_text') result = await this.store.search(call.query, call.paths);
               else if (call.name === 'run_command') {
-                if (this.mode !== 'agent' || !this.runCommand) throw new Error('명령 실행은 Agent 모드에서만 사용할 수 있습니다.');
+                if (this.mode !== 'agent' || !this.runCommand) throw new Error('이번 요청은 읽기 전용 분석입니다. 명령 실행이 필요하면 실행할 작업을 요청하세요.');
                 result = await this.runCommand(call.command);
               }
               else throw new Error('지원하지 않는 도구입니다.');
@@ -90,7 +90,7 @@ class CodingAgent {
         }
         if (reply.kind === 'changes') {
           try {
-            if (this.mode !== 'agent') throw new Error('Ask·Plan 모드에서는 파일을 수정할 수 없습니다. 설명 또는 계획으로 답변하세요.');
+            if (this.mode !== 'agent') throw new Error('이번 요청은 분석·계획이므로 파일을 수정하지 않습니다. 설명 또는 계획으로 답변하세요.');
             const changes = await this.store.prepareChanges(reply.files);
             this.emit({ type: 'message', role: 'assistant', text: reply.summary || '파일 수정안을 준비했습니다.' });
             const applied = await this.approveAndApply(changes, reply.summary || '파일 수정안');

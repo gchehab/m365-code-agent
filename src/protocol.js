@@ -1,6 +1,16 @@
 'use strict';
 const crypto = require('node:crypto');
 const newId = () => crypto.randomUUID();
+function stableJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+function replyIdentity(value) {
+  if (value.kind === 'tools') return stableJson({ requestId: value.requestId, kind: value.kind, calls: value.calls });
+  if (value.kind === 'changes') return stableJson({ requestId: value.requestId, kind: value.kind, files: value.files.map(file => ({ path: file.path, action: file.action, baseHash: file.baseHash, content: file.content, edits: file.edits?.map(edit => ({ oldText: edit.oldText, newText: edit.newText })) })) });
+  return stableJson({ requestId: value.requestId, kind: value.kind, message: value.message, outcome: value.outcome || 'completed' });
+}
 function normalizeToolCall(call) {
   if (!call || typeof call !== 'object') throw new Error('도구 요청 객체가 없습니다.');
   const name = call.name || call.function?.name;
@@ -64,9 +74,10 @@ function parseReply(text, expectedId) {
       else if (value.kind === 'tools' && (!Array.isArray(value.calls) || !value.calls.length || value.calls.length > 8)) error = '도구 요청은 1~8개여야 합니다.';
       else if (value.kind === 'tools') { try { value.calls = value.calls.map(normalizeToolCall); } catch { error = '도구 이름 또는 인자 형식이 올바르지 않습니다.'; } }
       else if (value.kind === 'changes' && !Array.isArray(value.files)) error = '변경 파일 목록이 없습니다.';
+      else if (value.kind === 'changes' && value.files.some(file => !file || typeof file !== 'object' || (file.edits !== undefined && (!Array.isArray(file.edits) || file.edits.some(edit => !edit || typeof edit !== 'object'))))) error = '변경 파일 또는 부분 수정 형식이 올바르지 않습니다.';
       else if (value.kind === 'done' && typeof value.message !== 'string') error = '완료 설명이 없습니다.';
       if (error) { schemaError = error; continue; }
-      replies.set(JSON.stringify(value), value);
+      replies.set(replyIdentity(value), value);
     }
   }
   if (replies.size === 1) return replies.values().next().value;
@@ -124,4 +135,4 @@ function buildPrompt({ id, task, workspace, files, history = [], extraContext, m
   return prompt;
 }
 
-module.exports = { parseReply, buildPrompt, newId, normalizeToolCall };
+module.exports = { parseReply, buildPrompt, newId, normalizeToolCall, replyIdentity };

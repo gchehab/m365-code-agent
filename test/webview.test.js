@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { chromium } = require('playwright-core');
+const { decorate } = require('../src/markdown');
 
 test('chat UI handles submission, Korean IME, progress, approvals and narrow layouts', async t => {
   const root = path.resolve(__dirname, '..');
@@ -47,11 +48,25 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   assert.equal((await page.evaluate(() => window.sent.filter(message => message.type === 'run'))).length, 1);
   assert.equal(await page.locator('#stop').isVisible(), true);
   const host = data => page.evaluate(data => window.dispatchEvent(new MessageEvent('message', { data })), data);
+  assert.equal(await page.locator('#mode').count(), 0);
+  await host({ type: 'idle' });
+  const submitted = await page.evaluate(() => window.sent.find(message => message.type === 'run'));
+  await host({ type: 'runResult', clientRequestId: submitted.clientRequestId, success: false });
+  assert.match(await input.inputValue(), /첫 줄/);
+  await input.fill('다시 요청'); await input.press('Enter');
+  const next = await page.evaluate(() => window.sent.filter(message => message.type === 'run').at(-1));
+  await input.fill('다음 작업 작성 중');
+  await host({ type: 'runResult', clientRequestId: next.clientRequestId, success: false });
+  assert.equal(await input.inputValue(), '다음 작업 작성 중');
   await host({ type: 'message', role: 'user', text: '빈 배열 오류를 수정하고 테스트해줘.' });
   await host({ type: 'tool', id: 'read-1', label: 'read_file · src/average.js', state: 'running' });
   await host({ type: 'tool', id: 'read-1', label: 'read_file · src/average.js', state: 'done' });
   assert.equal(await page.locator('.tool').count(), 1);
-  await host({ type: 'message', role: 'assistant', text: '빈 배열에는 null을 반환하도록 수정합니다.\n```js\naverage([]) === null\n```' });
+  await host(decorate({ type: 'message', role: 'assistant', text: '## 변경 결과\n\n빈 배열에는 null을 반환하도록 수정합니다.\n```js\naverage([]) === null\n```\n\n| 파일 | 결과 |\n| --- | --- |\n| average.js | 완료 |' }));
+  assert.equal(await page.locator('.markdown h2').textContent(), '변경 결과');
+  assert.equal(await page.locator('.markdown table').count(), 1);
+  await page.locator('.code-toolbar button').click();
+  assert.match((await page.evaluate(() => window.sent.find(message => message.type === 'copyCode'))).text, /average\(\[\]\)/);
   await host({ type: 'changes', summary: '빈 배열 처리 및 회귀 테스트', files: [{ id: 'preview-1', path: 'src/average.js', action: 'replace' }], review: true, forcedReview: ['package.json'], token: 'review-123' });
   assert.match(await page.locator('#reviewReason').textContent(), /자동 적용/);
   await page.locator('#apply').click();
@@ -61,6 +76,9 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await page.locator('#approveCommand').click();
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'approveCommand'))).token, 'cmd-123');
   await host({ type: 'idle' });
+  await host({ type: 'models', choices: [{ id: 'real-id', label: '계정에서 읽은 모델' }], selected: '' });
+  await page.locator('#model').selectOption('real-id');
+  assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'selectModel'))).id, 'real-id');
   await host({ type: 'status', text: '전송을 확인하지 못했습니다.', error: true });
   assert.equal(await page.locator('#status.error').textContent(), '전송을 확인하지 못했습니다.');
   for (const width of [280, 360]) {
@@ -71,4 +89,24 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await host({ type: 'changes', summary: '빈 배열 처리 및 회귀 테스트', files: [{ id: 'preview-1', path: 'src/average.js', action: 'replace' }, { id: 'preview-2', path: 'test/average.test.js', action: 'create' }], review: true, token: 'new' });
   await fs.mkdir(path.join(root, '.test-output'), { recursive: true });
   await page.screenshot({ path: path.join(root, '.test-output', 'agent-ui.png') });
+
+  // Exercise the host's actual conversation mapping without calling a model or file tool.
+  view.webview.postMessage = noop;
+  let snapshot = { url: 'https://m365.cloud.microsoft/chat?threadId=one', restorable: true, messages: [{ type: 'message', role: 'user', text: '첫 대화', webId: 'one:1' }] };
+  provider.browser = { page: { isClosed: () => false }, readConversation: async () => snapshot };
+  await provider.syncWeb();
+  const firstId = provider.sessionId;
+  snapshot = { url: 'https://m365.cloud.microsoft/chat?threadId=two', restorable: true, messages: [{ type: 'message', role: 'user', text: '다른 대화', webId: 'two:1' }] };
+  await provider.syncWeb();
+  assert.notEqual(provider.sessionId, firstId);
+  assert.equal(provider.events[0].text, '다른 대화');
+  snapshot = { url: 'https://m365.cloud.microsoft/chat?threadId=one', restorable: true, messages: [{ type: 'message', role: 'user', text: '첫 대화', webId: 'one:1' }, { type: 'message', role: 'assistant', text: '웹에서 추가된 답변', webId: 'one:2' }] };
+  await provider.syncWeb();
+  assert.equal(provider.sessionId, firstId);
+  assert.equal(provider.events.length, 2);
+  await provider.syncWeb();
+  assert.equal(provider.events.length, 2);
+  await provider.newChat();
+  await provider.syncWeb();
+  assert.equal(provider.events.length, 0, 'a new local chat must not re-import the previous web conversation');
 });
