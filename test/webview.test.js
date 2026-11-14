@@ -98,6 +98,7 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
 
   await page.getByRole('button', { name: '더 보기', exact: true }).click();
   assert.equal(await page.getByRole('menu').isVisible(), true);
+  await page.getByRole('menuitem', { name: '웹 대화 동기화' }).focus();
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.getByRole('menuitem', { name: '연결 진단' }).evaluate(element => element === document.activeElement), true);
   await page.getByRole('menuitem', { name: '연결 진단' }).click();

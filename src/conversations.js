@@ -46,7 +46,7 @@ class ConversationController {
   }
   async newChat() {
     const host = this.host;
-    if (host.starting || host.sessionSwitching || host.agent?.running) throw new Error('진행 중인 작업을 먼저 중지하세요.');
+    if (host.starting || host.switchingBrowser || host.sessionSwitching || host.agent?.running) throw new Error('진행 중인 작업을 먼저 중지하세요.');
     this.invalidate();
     host.saveSession();
     host.sessionId = crypto.randomUUID();
@@ -68,7 +68,7 @@ class ConversationController {
   publishList() { this.host.view?.webview.postMessage({ type: 'sessions', items: this.summaries() }); }
   async selectSession(select) {
     const host = this.host;
-    if (host.starting || host.sessionSwitching || host.agent?.running) return;
+    if (host.starting || host.switchingBrowser || host.sessionSwitching || host.agent?.running) return;
     this.invalidate(); host.sessionSwitching = true; host.stopRequested = false;
     host.post({ type: 'busy' });
     try {
@@ -87,7 +87,7 @@ class ConversationController {
   }
   async manageSession(action, id) {
     const host = this.host, window = this.vscode.window;
-    if (host.starting || host.sessionSwitching || host.agent?.running) throw new Error('진행 중인 작업을 마친 뒤 기록을 관리하세요.');
+    if (host.starting || host.switchingBrowser || host.sessionSwitching || host.agent?.running) throw new Error('진행 중인 작업을 마친 뒤 기록을 관리하세요.');
     if (!['rename', 'delete', 'deleteAll'].includes(action)) return;
     const session = host.sessions.find(item => item.id === id);
     if (action !== 'deleteAll' && !session) return;
@@ -119,7 +119,7 @@ class ConversationController {
   }
   async syncWeb(manual = true) {
     const host = this.host;
-    if (host.starting || host.sessionSwitching || host.agent?.running || host.syncing) return;
+    if (host.starting || host.switchingBrowser || host.sessionSwitching || host.agent?.running || host.syncing) return;
     if (host.newWebChat) { if (manual) host.post({ type: 'status', text: '이 대화는 첫 요청을 보내면 새 웹 대화와 연결됩니다.' }); return; }
     if (!host.browser?.page || host.browser.page.isClosed() || !host.browser.readConversation) { if (manual) throw new Error('먼저 Copilot을 연결하고 웹 대화를 여세요.'); return; }
     host.syncing = true;
@@ -128,7 +128,7 @@ class ConversationController {
     try {
       if (!manual && !host.view?.visible) return;
       const snapshot = await host.browser.readConversation();
-      if (host.starting || host.sessionSwitching || host.agent?.running || host.newWebChat || host.sessionId !== sessionId || this.revision !== revision || host.browser !== browser || browser.page !== page || page.isClosed() || (pageUrl && conversationUrl(page.url()).url !== pageUrl)) return;
+      if (host.starting || host.switchingBrowser || host.sessionSwitching || host.agent?.running || host.newWebChat || host.sessionId !== sessionId || this.revision !== revision || host.browser !== browser || browser.page !== page || page.isClosed() || (pageUrl && conversationUrl(page.url()).url !== pageUrl)) return;
       if (host.webUrl && !snapshot.restorable) { if (manual) host.post({ type: 'status', text: '웹 대화 주소가 아직 정해지지 않았습니다. 웹에서 대화를 시작한 뒤 동기화하세요.' }); return; }
       const previousUrl = host.webUrl;
       if (snapshot.restorable && host.webUrl !== snapshot.url) {

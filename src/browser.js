@@ -48,8 +48,8 @@ class CopilotBrowser {
     const url = validateCopilotUrl(this.options.url);
     const { chromium } = require('playwright-core');
     this.context = await chromium.launchPersistentContext(this.options.profile, {
-      channel: this.options.channel || 'msedge', headless: false,
-      viewport: null, acceptDownloads: false, locale: 'ko-KR'
+      channel: this.options.channel || 'msedge', headless: Boolean(this.options.embedded),
+      viewport: this.options.embedded ? { width: 1100, height: 760 } : null, acceptDownloads: false, locale: 'ko-KR'
     });
     this.context.on('close', () => { this.context = null; this.page = null; });
     this.page = this.context.pages()[0] || await this.context.newPage();
@@ -239,7 +239,9 @@ class CopilotBrowser {
       await this.connect();
       let baseline;
       for (let attempt = 0; attempt < 3; attempt++) {
+      this.automationActive = false;
       const { locator, frame } = await this.waitForComposer(onStatus);
+      this.automationActive = true;
       validateCopilotUrl(this.page.url());
       const draft = (await readComposer(locator)).text;
       if (await this.generationActive()) throw new Error('Copilot이 다른 응답을 생성 중입니다. 완료 후 다시 실행하세요.');
@@ -316,6 +318,7 @@ class CopilotBrowser {
         } catch { /* Never clear a draft that is not exactly the one we inserted. */ }
       }
       this.busy = false;
+      this.automationActive = false;
     }
   }
   async stop() {
@@ -329,8 +332,8 @@ class CopilotBrowser {
     } catch { /* Local cancellation still prevents applying subsequent results. */ }
   }
   conversationInfo() { validateCopilotUrl(this.page.url()); return conversationUrl(this.page.url()); }
-  async models(onStatus) { return require('./web-controls').listModels(this, onStatus); }
-  async selectModel(id, onStatus) { return require('./web-controls').selectModel(this, id, onStatus); }
+  async models(onStatus) { await this.connect(); await this.waitForComposer(onStatus); this.automationActive = true; try { return await require('./web-controls').listModels(this, onStatus); } finally { this.automationActive = false; } }
+  async selectModel(id, onStatus) { await this.connect(); await this.waitForComposer(onStatus); this.automationActive = true; try { return await require('./web-controls').selectModel(this, id, onStatus); } finally { this.automationActive = false; } }
   async readConversation() { validateCopilotUrl(this.page.url()); return require('./web-controls').readConversation(this); }
   async close() {
     this.cancelled = true;

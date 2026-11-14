@@ -16,7 +16,7 @@ function persist() { api.setState({ draft: el('task').value, pendingTask, review
 function busy(value) {
   running = value;
   if (!value) progress(null);
-  for (const id of ['run', 'connect', 'newChat', 'history', 'more', 'attach', 'model', 'refreshModels', 'syncWeb', 'diagnostics', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
+  for (const id of ['run', 'connect', 'newChat', 'history', 'more', 'attach', 'model', 'refreshModels', 'syncWeb', 'showBrowser', 'editorBrowser', 'diagnostics', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
   for (const control of el('historyPanel').querySelectorAll('button,input')) control.disabled = value;
   el('deleteAllSessions').disabled = value || !sessions.length;
   if (value) toggleMore(false);
@@ -76,7 +76,7 @@ el('task').addEventListener('keydown', event => {
   if (event.key === 'Escape' && running) send('stop');
 });
 for (const id of ['task', 'review', 'includeEditor']) el(id).addEventListener('input', persist);
-for (const id of ['connect', 'newChat', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand', 'checkWorkspace', 'refreshModels', 'syncWeb']) el(id).addEventListener('click', () => {
+for (const id of ['connect', 'newChat', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand', 'checkWorkspace', 'refreshModels', 'syncWeb', 'showBrowser', 'editorBrowser']) el(id).addEventListener('click', () => {
   toggleMore(false);
   if (id === 'newChat') showHistory(false);
   if (['apply', 'reject'].includes(id)) closeReview();

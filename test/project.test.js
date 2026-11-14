@@ -109,8 +109,9 @@ test('natural-language questions cannot be forced into edits and unknown edit wo
 });
 
 test('default budget permits more than twelve rounds and configured limits still stop execution', async t => {
-  const { store } = await fixture(t); const events = []; let count = 0;
-  const transport = { async request() { if (++count <= 12) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/main.js' }] }; return { kind: 'done', message: '13번째 요청에서 완료' }; } };
+  const { root, store } = await fixture(t); const events = []; let count = 0;
+  await fs.writeFile(path.join(root, 'src/main.js'), Array.from({length: 20}, (_, i) => 'const line' + i + ' = ' + i + ';').join('\n'));
+  const transport = { async request() { if (++count <= 12) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/main.js', startLine: count, lineCount: 1 }] }; return { kind: 'done', message: '13번째 요청에서 완료' }; } };
   const agent = new CodingAgent({ store, emit: event => events.push(event), transport });
   assert.equal((await agent.run('프로젝트를 분석해줘')).status, 'done');
   assert.equal(count, 13);

@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -82,6 +82,14 @@
       {
         "command": "m365Agent.refreshModels",
         "title": "M365 Agent: 웹 모델 목록 불러오기"
+      },
+      {
+        "command": "m365Agent.showBrowser",
+        "title": "M365 Agent: Copilot 브라우저 열기"
+      },
+      {
+        "command": "m365Agent.editorBrowser",
+        "title": "M365 Agent: VS Code 브라우저로 전환"
       }
     ],
     "viewsContainers": {
@@ -180,6 +188,15 @@
           "type": "string",
           "default": "",
           "description": "선택 사항: Copilot 응답 컨테이너 CSS 선택자"
+        },
+        "m365Agent.browserView": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "external"
+          ],
+          "default": "editor",
+          "description": "Copilot 브라우저 표시 위치. editor는 VS Code 편집기 탭에 실제 자동화 브라우저 화면을 표시합니다. 외부 인증 창이 필요한 환경에서는 external을 사용하세요."
         }
       }
     }

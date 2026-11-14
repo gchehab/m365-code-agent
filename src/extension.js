@@ -17,6 +17,7 @@ const { mergeHistory } = require('./web-history');
 const { ConversationController } = require('./conversations');
 const { ModelController } = require('./models');
 const { ChangeController } = require('./changes');
+const { BrowserPanel } = require('./browser-panel');
 
 class AgentView {
   constructor(context) {
@@ -24,6 +25,7 @@ class AgentView {
     this.conversations = new ConversationController(this, vscode);
     this.models = new ModelController(this);
     this.changes = new ChangeController(this, vscode);
+    this.browserPanel = new BrowserPanel(this, vscode);
     this.sessions = context.workspaceState.get('sessions', []);
     this.sessionId = context.workspaceState.get('activeSession');
     this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
@@ -59,7 +61,7 @@ class AgentView {
   }
   saveSession() { return this.conversations.saveSession(); }
   state() {
-    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress, sessions: this.conversations.summaries() };
+    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.switchingBrowser || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress, sessions: this.conversations.summaries() };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -116,20 +118,42 @@ class AgentView {
       await fs.mkdir(profile, { recursive: true });
       this.browser = new CopilotBrowser({
         profile, url: config.get('copilotUrl'), channel: config.get('browserChannel'),
+        embedded: (this.browserViewOverride || config.get('browserView', 'editor')) === 'editor',
         composerSelector: config.get('composerSelector'), sendButtonSelector: config.get('sendButtonSelector'),
         responseSelector: config.get('responseSelector'), timeoutSeconds: config.get('responseTimeoutSeconds'), loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600), modelButtonSelector: config.get('modelButtonSelector'), onConversation: info => { if (info.restorable) { this.webUrl = info.url; this.saveSession(); this.post({ type: 'webConversation', url: info.url }); } }
       });
     }
-    try { await this.browser.connect(); }
+    try {
+      if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor') this.browserPanel.show();
+      await this.browser.connect();
+    }
     catch (error) {
       throw new Error(`M365 연결 실패: ${error.message}\nPC에 Edge가 설치되어 있고 회사 정책에서 브라우저 자동화가 허용되는지 확인하세요.`, { cause: error });
     }
     return this.browser;
   }
   async connect() {
+    if (this.switchingBrowser) throw new Error('브라우저 전환이 끝난 뒤 다시 연결하세요.');
     await this.ensureBrowser();
     const result = await this.browser.diagnostics();
-    this.post({ type: 'message', role: 'system', text: `전용 브라우저 연결: ${result.title}\n${result.url}\n회사 계정 로그인 후 대화 화면에서 작업을 시작하세요.` });
+    this.post({ type: 'message', role: 'system', text: `Copilot 브라우저 연결: ${result.title}\n${result.url}\n브라우저 화면에서 회사 계정 로그인 후 작업을 시작하세요.` });
+  }
+  async showBrowser() {
+    if (this.switchingBrowser) return;
+    const browser = await this.ensureBrowser();
+    if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor') this.browserPanel.show(false);
+    else await browser.page.bringToFront();
+  }
+  async switchBrowserView(mode) {
+    if (!['editor', 'external'].includes(mode) || this.switchingBrowser) return;
+    this.switchingBrowser = true;
+    this.post({ type: 'busy' });
+    try {
+      await this.stop(); await this.currentRun?.catch(() => {});
+      this.browserPanel.dispose(); await this.browser?.close(); this.browser = null;
+      this.browserViewOverride = mode; await this.ensureBrowser();
+      this.post({ type: 'status', text: mode === 'editor' ? 'VS Code 브라우저에 연결했습니다.' : '외부 브라우저로 전환했습니다. 중지된 요청은 입력창에서 다시 보낼 수 있습니다.' });
+    } finally { this.switchingBrowser = false; this.post({ type: 'idle' }); }
   }
   async newChat() { return this.conversations.newChat(); }
   async showHistory() { return this.conversations.showHistory(); }
@@ -169,6 +193,11 @@ class AgentView {
     this.post({ type: 'status', text: '중지 요청됨. 이후 응답은 파일에 적용하지 않습니다.' });
   }
   async start(message) {
+    if (this.currentRun || this.switchingBrowser) throw new Error('이미 작업 또는 브라우저 전환 중입니다.');
+    const job = this.runTask(message); this.currentRun = job;
+    try { return await job; } finally { if (this.currentRun === job) this.currentRun = null; }
+  }
+  async runTask(message) {
     if (this.starting || this.sessionSwitching || this.agent?.running) throw new Error('이미 작업 또는 대화 전환 중입니다.');
     this.starting = true;
     this.taskId = crypto.randomUUID();
@@ -202,7 +231,7 @@ class AgentView {
         else contextFiles.push(file);
       }
       if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
-      const { task, mode } = resolveTask(message.task);
+      const { task, mode, intent } = resolveTask(message.task);
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.saveSession();
       if (browser.waitForComposer && browser.context) {
@@ -215,7 +244,7 @@ class AgentView {
       }
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
-        mode, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
+        mode, intent, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
         maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
         runCommand: command => this.runCommand(command, folder.uri.fsPath),
         approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review)) });
@@ -234,6 +263,8 @@ class AgentView {
   async handle(message) {
     if (!message || typeof message.type !== 'string') return;
     if (message.type === 'ready') { this.view.webview.postMessage(this.state()); return; }
+    if (message.type === 'showBrowser') return this.showBrowser();
+    if (message.type === 'editorBrowser') return this.switchBrowserView('editor');
     if (message.type === 'syncWeb') return this.syncWeb();
     if (message.type === 'refreshModels') return this.refreshModels();
     if (message.type === 'selectModel') return this.chooseModel(message.id);
@@ -268,7 +299,7 @@ class AgentView {
       return vscode.commands.executeCommand('vscode.diff', makeUri('-old'), makeUri('-new'), 'M365 Agent · 변경 미리보기');
     }
   }
-  async dispose() { clearInterval(this.syncTimer); await this.stop(); if (this.browser) await this.browser.close(); this.output.dispose(); }
+  async dispose() { clearInterval(this.syncTimer); this.browserPanel.dispose(); await this.stop(); await this.currentRun?.catch(() => {}); if (this.browser) await this.browser.close(); this.output.dispose(); }
 }
 
 function activate(context) {
@@ -280,6 +311,8 @@ function activate(context) {
   const command = (name, fn) => context.subscriptions.push(vscode.commands.registerCommand(name, () => Promise.resolve(fn()).catch(error => vscode.window.showErrorMessage(error.message))));
   command('m365Agent.open', () => vscode.commands.executeCommand('m365Agent.chat.focus'));
   command('m365Agent.connect', () => provider.connect());
+  command('m365Agent.showBrowser', () => provider.showBrowser());
+  command('m365Agent.editorBrowser', () => provider.switchBrowserView('editor'));
   command('m365Agent.newChat', () => provider.newChat());
   command('m365Agent.stop', () => provider.stop());
   command('m365Agent.diagnostics', () => provider.diagnostics());

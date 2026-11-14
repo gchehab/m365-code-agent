@@ -179,6 +179,10 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     transport.context = context; transport.page = chat; provider.browser = transport;
     await provider.start({ task: '응답 수집을 확인해줘.', mode: 'ask', includeEditor: false });
     assert.equal(transport.lastResponse.stage, 'complete');
+    assert.equal(provider.browserPanel.panel.viewType, 'm365Agent.browser');
+    for (let tries = 0; tries < 60 && (!provider.browserPanel.screen?.sequence || provider.browserPanel.screen.inFlight); tries++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.ok(provider.browserPanel.screen.sequence > 0, 'actual editor browser receives live frames');
+    assert.equal(provider.browserPanel.screen.page, transport.page, 'visible browser and automation use the same page');
     assert.ok(provider.events.some(event => event.role === 'assistant' && event.text === '실제 VS Code 자동 응답 수집 확인'));
     const target = 'exports.value = 1;\n' + '// project source filler\n'.repeat(20000);
     await fs.writeFile(path.join(root, 'src', 'target.js'), target);

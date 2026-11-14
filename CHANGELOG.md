@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Display the actual automation browser in a VS Code editor panel by default, with live frames, mouse/keyboard/IME input, tab selection, navigation and an external-browser fallback. Keep the existing dedicated Edge profile; no iframe, localhost server, cookie extraction or security-header overrides.
+- Allow manual login before the queued task starts; lock browser input during automated submission/response collection and model-menu interaction. Reject stale input after page/viewport changes, bound pending frames and pause capture when hidden.
+- Follow the latest user's input language for model summaries/answers, giving explicit response-language requests precedence. Preserve original text through review/test shortcuts instead of adding Korean task instructions.
+- Include stable task progress in follow-ups, automatically read proposal targets after validation failures, and stop repeated unchanged reads/validation failures after correction attempts instead of consuming all rounds. Keep file/hash/review/command protections.
+
 ## 0.6.0
 
 - Merge compatible current-request JSON across separate code blocks and overlapping response containers: per-file proposals, nonconflicting partial edits, distinct tool calls and explanatory completions.
