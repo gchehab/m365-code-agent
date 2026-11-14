@@ -44,6 +44,7 @@
     }
   },
   "scripts": {
+    "prepackage": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\"",
     "test": "node --test test/*.test.js",
     "check": "node --check src/extension.js && node --check src/browser.js && node --check src/workspace.js && node --check src/protocol.js",
     "package": "vsce package --out dist/m365-code-agent-0.1.0.vsix"
