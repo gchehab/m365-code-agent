@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- Collect rendered JSON from tenant-specific code widgets, highlighted spans, open shadow roots and child frames, beyond pre/code tags.
+- Parse balanced JSON objects surrounded by language headings/copy controls. Normalize editor whitespace only outside JSON strings.
+- Ignore disabled/unrelated Stop controls and stabilize the parsed JSON rather than changing copy/footer text.
+- Reject outgoing prompt echoes, stale IDs and conflicting current-turn responses. Protocol examples now use placeholder IDs.
+- Add response-stage diagnostics with candidate counts, ID matches, parsing and generation state; never log captured response bodies.
+
 ## 0.3.0
 
 - Add bounded line-range reads and exact partial edits for files up to 128KB. Reject unseen, ambiguous, overlapping or stale edit anchors.

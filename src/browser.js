@@ -1,6 +1,7 @@
 'use strict';
 const { parseReply } = require('./protocol');
 const { normalizeDraft, matchesPrompt, readComposer, promptLimitError, isAgentProtocolDraft } = require('./composer');
+const { scanResponses, defaultResponses } = require('./responses');
 
 const allowedHosts = new Set(['m365.cloud.microsoft', 'copilot.cloud.microsoft', 'www.microsoft365.com', 'microsoft365.com', 'www.office.com', 'office.com']);
 function validateCopilotUrl(value) {
@@ -82,7 +83,7 @@ class CopilotBrowser {
     await this.connect();
     let composer;
     try { composer = (await this.getComposer()).selector; } catch (error) { composer = error.message; }
-    return { url: this.page.url().split('?')[0], title: await this.page.title(), composer, frames: this.page.frames().length, lastSend: this.lastSend || null };
+    return { url: this.page.url().split('?')[0], title: await this.page.title(), composer, frames: this.page.frames().length, lastSend: this.lastSend || null, lastResponse: this.lastResponse || null };
   }
   async findSendButton(frame, composer) {
     const groups = this.options.sendButtonSelector ? [frame.locator(this.options.sendButtonSelector)] : [
@@ -118,7 +119,7 @@ class CopilotBrowser {
       const cleared = await readComposer(locator).then(snapshot => !snapshot.text.trim()).catch(() => false);
       const generating = await this.generationActive();
       let reply = false;
-      for (const text of await this.responseCandidates()) {
+      for (const text of await this.responseCandidates(id, prompt)) {
         if (baseline.has(text)) continue;
         try { parseReply(text, id); reply = true; break; } catch { /* Not a complete response yet. */ }
       }
@@ -163,19 +164,23 @@ class CopilotBrowser {
     if (matchesPrompt(snapshot, prompt)) this.ownedDraft = snapshot;
     await this.verifyInput(locator, prompt);
   }
-  async responseCandidates() {
-    const texts = [];
-    const selector = this.options.responseSelector || 'pre, code, [data-message-author-role="assistant"], [data-content="ai-message"], [data-testid="assistant-message"], [data-testid="copilot-message"]';
+  async responseCandidates(id, prompt) {
+    const texts = new Set(), sources = new Set();
+    let truncated = false;
+    const selector = this.options.responseSelector || defaultResponses;
     for (const frame of this.page.frames()) {
-      const blocks = await frame.locator(selector).evaluateAll(nodes => nodes.filter(node => node.getClientRects().length).map(node => node.innerText || node.textContent || ''));
-      texts.push(...blocks.slice(-80).map(text => text.slice(0, 1024 * 1024)));
+      if (frame.isDetached()) continue;
+      const scan = await frame.evaluate(scanResponses, { selector, id, prompt });
+      truncated ||= scan.truncated;
+      for (const block of scan.blocks) { texts.add(block.text); sources.add(block.source); }
     }
-    return texts;
+    this.responseScan = { candidates: texts.size, sources: [...sources], scanTruncated: truncated };
+    return [...texts];
   }
   async generationActive() {
-    const pattern = /^(Stop generating|Stop responding|Stop response|응답 중지|생성 중지|답변 중지|중지)$/i;
+    const pattern = /^(Stop generating|Stop responding|Stop response|Stop generation|응답 중지|생성 중지|답변 중지|응답 생성 중지|답변 생성 중지)(\s*\(.*\))?$/i;
     for (const frame of this.page.frames()) {
-      for (const button of await frame.getByRole('button', { name: pattern }).all()) if (await button.isVisible()) return true;
+      for (const button of await frame.getByRole('button', { name: pattern }).all()) if (await button.isVisible() && await button.isEnabled()) return true;
     }
     return false;
   }
@@ -196,6 +201,7 @@ class CopilotBrowser {
     this.busy = true;
     this.cancelled = false;
     this.lastSend = null;
+    this.lastResponse = { stage: 'not-submitted' };
     this.ownedDraft = null;
     let submitted = false;
     try {
@@ -210,33 +216,47 @@ class CopilotBrowser {
         onStatus('이전 버전이 남긴 자동화 요청 초안을 정리했습니다. 새 요청을 준비합니다.');
       }
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      const baseline = new Set(await this.responseCandidates());
+      const baseline = new Set(await this.responseCandidates(id, prompt));
       onStatus('Copilot에 요청을 보내고 있습니다…');
       await this.writePrompt(locator, prompt);
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
       await this.submitPrompt(locator, frame, prompt, baseline, id);
       submitted = true;
+      this.lastResponse = { stage: 'waiting' };
       onStatus('전송 확인됨 · Copilot 응답을 기다리고 있습니다…');
       const deadline = Date.now() + (this.options.timeoutSeconds || 240) * 1000;
-      let candidateText = '', stableSince = 0, reported = false;
+      let candidateText = '', stableSince = 0, lastStage = '';
       while (Date.now() < deadline) {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         if (this.page.isClosed()) throw new Error('Copilot 브라우저 창이 닫혔습니다.');
         validateCopilotUrl(this.page.url());
-        const blocks = await this.responseCandidates();
-        let found = '';
-        for (const text of blocks.reverse()) {
+        const blocks = await this.responseCandidates(id, prompt);
+        let found, matching = 0, parseError, ambiguous = false;
+        const parsed = new Map();
+        for (const text of blocks) {
           if (baseline.has(text) || !text.includes(id)) continue;
-          try { parseReply(text, id); found = text; break; } catch { /* Still streaming or unrelated block. */ }
+          matching++;
+          try { const value = parseReply(text, id); parsed.set(JSON.stringify(value), value); }
+          catch (error) { parseError = error.code || 'REPLY_NOT_FOUND'; ambiguous ||= error.code === 'AMBIGUOUS_REPLY'; }
         }
+        if (parsed.size > 1 || ambiguous) throw new Error('현재 요청의 서로 다른 JSON 응답이 여러 개 감지되어 적용하지 않았습니다.');
+        found = parsed.values().next().value;
+        const generating = await this.generationActive();
+        const stage = found ? 'json-confirmed' : matching ? 'json-incomplete' : 'waiting';
+        this.lastResponse = { stage, ...this.responseScan, matchingRequestId: matching, parsed: Boolean(found), generating, parseError: found ? null : parseError || null };
         if (found) {
-          if (found !== candidateText) { candidateText = found; stableSince = Date.now(); }
-          if (Date.now() - stableSince >= 2500 && !(await this.generationActive())) return parseReply(found, id);
+          const signature = JSON.stringify(found);
+          if (signature !== candidateText) { candidateText = signature; stableSince = Date.now(); }
+          if (Date.now() - stableSince >= (this.options.responseStableMs ?? 2500) && !generating) { this.lastResponse.stage = 'complete'; return found; }
         } else { candidateText = ''; stableSince = 0; }
-        if (!reported) { onStatus('Copilot 응답을 자동으로 수집하고 있습니다…'); reported = true; }
+        if (stage !== lastStage) {
+          onStatus(found ? '현재 요청의 JSON 확인됨 · 응답 완료 확인 중…' : matching ? '현재 요청 ID가 있는 답변 발견 · JSON 수집 중…' : 'Copilot 답변 영역을 찾고 있습니다…');
+          lastStage = stage;
+        }
         await this.page.waitForTimeout(500);
       }
-      throw new Error('시간 안에 올바른 응답을 받지 못했습니다. 전용 창에서 로그인·사용량 제한·응답 형식을 확인하세요. 요청은 자동 재전송하지 않았습니다.');
+      const result = this.lastResponse;
+      throw new Error(`Copilot 응답 수집 시간이 초과됐습니다. 후보 ${result.candidates || 0}개 / 현재 요청 ID ${result.matchingRequestId || 0}개 / JSON ${result.parsed ? '확인됨' : '미확인'} / 생성 ${result.generating ? '진행 중으로 감지' : '종료로 감지'}. ⋯ 연결 진단에서 수집 단계를 확인하세요. 요청은 재전송하지 않았습니다.`);
     } finally {
       if (!submitted && !['clicked', 'unconfirmed'].includes(this.lastSend?.stage) && this.ownedDraft && this.page && !this.page.isClosed()) {
         try {

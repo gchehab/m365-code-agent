@@ -129,6 +129,11 @@ class AgentView {
     this.output.appendLine(JSON.stringify(data, null, 2));
     this.output.show();
     this.post({ type: 'message', role: 'system', text: `연결 진단\n주소: ${data.url}\n입력창: ${data.composer}\n페이지 프레임: ${data.frames}\n최근 전송: ${data.lastSend?.stage || '없음'}${data.lastSend ? `\n입력: 요청 ${data.lastSend.characters}자 / 확인 ${data.lastSend.observedCharacters ?? '?'}자 / 한도 ${data.lastSend.maxLength ?? '미표시'}` : ''}` });
+    if (data.lastResponse) {
+      const response = data.lastResponse;
+      const stage = { 'not-submitted': '전송 전', waiting: '응답 영역 대기', 'json-incomplete': '요청 ID 발견·JSON 수집 중', 'json-confirmed': 'JSON 확인·생성 종료 대기', complete: '수집 완료' }[response.stage] || response.stage;
+      this.post({ type: 'message', role: 'system', text: `응답 수집 진단\n단계: ${stage}\n응답 후보: ${response.candidates || 0}개 / 현재 요청 ID: ${response.matchingRequestId || 0}개\nJSON: ${response.parsed ? '확인됨' : '미확인'} / 생성 상태: ${response.generating ? '진행 중' : '종료 또는 미감지'}\n수집 경로: ${response.sources?.join(', ') || '없음'}${response.parseError ? '\n해석 상태: ' + response.parseError : ''}` });
+    }
   }
   async stop() {
     this.stopRequested = true;

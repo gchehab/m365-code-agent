@@ -114,8 +114,22 @@ async function run() {
     await page.setContent('<meta charset="utf-8"><textarea id="userInput"></textarea>');
     await page.locator('#userInput').fill('확장 호스트에서 Edge 자동 입력');
     assert.equal(await page.locator('#userInput').inputValue(), '확장 호스트에서 Edge 자동 입력');
+    // Exercise the complete provider -> browser -> rendered widget -> provider
+    // path inside the extension host, without a real company account.
+    const context = await browser.newContext();
+    await context.route('https://m365.cloud.microsoft/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<textarea id="userInput"></textarea><button id="send">보내기</button><button disabled>Stop generating</button><main><section><div id="answer"></div></section></main><script>
+document.querySelector('#send').onclick=()=>{const input=document.querySelector('textarea');const id=input.value.match(/Current requestId: ([^\\s]+)/)[1];input.value='';document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify({requestId:id,kind:'done',message:'실제 VS Code 자동 응답 수집 확인'});};
+</script>` }));
+    const chat = await context.newPage();
+    await chat.goto('https://m365.cloud.microsoft/chat');
+    const { CopilotBrowser } = require(path.join(extension.extensionPath, 'src', 'browser'));
+    const transport = new CopilotBrowser({ timeoutSeconds: 7, responseStableMs: 100 });
+    transport.context = context; transport.page = chat; provider.browser = transport;
+    await provider.start({ task: '응답 수집을 확인해줘.', mode: 'ask', includeEditor: false });
+    assert.equal(transport.lastResponse.stage, 'complete');
+    assert.ok(provider.events.some(event => event.role === 'assistant' && event.text === '실제 VS Code 자동 응답 수집 확인'));
   } finally { await browser.close(); }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

@@ -13,7 +13,7 @@ VS Code의 프로젝트를 읽고 수정하며, 로그인된 M365 Copilot 웹과
 
 ## 설치
 
-1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.3.0.vsix`를 선택합니다.
+1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.3.1.vsix`를 선택합니다.
 2. 프로젝트 폴더를 열고 왼쪽 활동 표시줄의 M365 Agent 아이콘을 선택합니다.
 3. 입력창 아래 `연결`을 누릅니다. PC에 설치된 Edge가 확장 전용 프로필로 열립니다.
 4. 이 전용 창에서 **회사 계정 로그인과 MFA를 직접** 완료하고 Copilot 대화 화면으로 이동합니다.
@@ -66,6 +66,7 @@ GitHub Copilot·Codex·Claude Code의 일반적인 작업 방식을 참고한 �
 
 실제 회사 테넌트의 로그인된 화면에서는 아직 검증하지 못했습니다. M365의 화면 구조·실험적 UI·조직 정책에 따라 자동 감지를 조정해야 할 수 있습니다.
 `⋯`는 현재 주소, 제목, 입력창 감지 결과와 최근 전송 단계를 VS Code 출력 패널에 표시합니다. 쿠키·토큰과 파일 내용은 연결 진단 로그에 기록하지 않습니다. 승인한 명령과 그 출력은 출력 패널에 표시됩니다.
+응답이 화면에 보이는데 기다리는 경우에는 `응답 수집 진단`의 후보 수·현재 요청 ID 수·JSON 해석·생성 상태를 확인하세요. 수집은 코드 블록 외에 현재 요청 ID가 있는 작은 응답 영역, 열린 Shadow DOM과 자식 프레임도 탐색합니다. 언어명·복사 버튼 문구는 JSON 객체 밖에서 분리하며, 캡처한 답변 본문은 진단 로그에 저장하지 않습니다. 닫힌 Shadow DOM이나 화면에 전체 텍스트를 노출하지 않는 위젯은 수집하지 못할 수 있습니다.
 
 설정에서 다음을 조정할 수 있습니다.
 
