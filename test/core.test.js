@@ -170,8 +170,9 @@ test('prompt budgeting preserves the task, marks omissions and never silently tr
   assert.equal(data.task, task);
   assert.equal(data.files.truncated, true);
   assert.ok(data.context[0].omitted);
-  assert.ok(data.history[0].observations[0].error);
-  assert.equal(data.history[0].observations[0].result, undefined);
+  assert.equal(data.history[0].observations[0].result.complete, false);
+  assert.equal(data.history[0].observations[0].result.transportTruncated, true);
+  assert.ok(history[0].observations[0].result.content.startsWith(data.history[0].observations[0].result.content));
   assert.equal(history[0].observations[0].result.hash, 'abc');
 });
 

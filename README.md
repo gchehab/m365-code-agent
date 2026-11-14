@@ -79,7 +79,7 @@ GitHub Copilot·Codex·Claude Code의 일반적인 작업 방식을 참고한 �
 - `m365Agent.responseTimeoutSeconds`: 응답 대기 제한(기본 240초).
 - `m365Agent.maxRounds`: 읽기·수정 반복 제한(기본 12회).
 - `m365Agent.maxFileSizeMB`: 로컬 텍스트 파일 크기 상한(기본 16MB, 최대 128MB).
-- `m365Agent.maxPromptCharacters`: 요청 길이 상한(기본 12,000자). 입력창의 실제 한도가 더 작다고 전송 전에 확인되면 오래된 대화·파일 목록·첨부 문맥을 줄여 재구성합니다. 큰 파일 본문을 넘기지 못하면 도구 오류로 모델에 알리고 좁은 검색을 요청합니다. 사용자 요청과 코드 내용을 중간에서 잘라 보내지 않습니다.
+- `m365Agent.maxPromptCharacters`: 요청 길이 상한(기본 12,000자). 입력창의 실제 한도가 더 작다고 전송 전에 확인되면 오래된 대화·파일 목록·첨부 문맥을 줄여 재구성합니다. 본문 범위를 더 줄일 때는 complete=false와 이어 읽기 위치를 명시합니다. 범위를 전달할 수 없으면 도구 오류로 모델에 알립니다. 사용자 요청과 코드 내용을 중간에서 잘라 보내지 않습니다.
 - `m365Agent.browserChannel`: Edge(msedge) 또는 Chrome(chrome).
 - `m365Agent.commandOutputEncoding`: 기본 `utf8`. CP949 전용 도구는 `cp949`로 설정합니다. Windows 명령의 코드페이지와 출력 디코더를 함께 맞추며, 멀티바이트 문자가 출력 조각 경계에서 깨지지 않도록 스트림으로 처리합니다.
 

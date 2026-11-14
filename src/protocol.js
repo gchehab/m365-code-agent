@@ -104,7 +104,17 @@ function buildPrompt({ id, task, workspace, files, history = [], extraContext, m
       const observations = [...last.observations].sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length);
       for (const observation of observations) {
         if (render().length <= maxCharacters) break;
-        if (observation.result?.output !== undefined) observation.result = { ...observation.result, output: observation.result.output.slice(-1000), truncated: true };
+        if (typeof observation.result?.content === 'string') {
+          while (render().length > maxCharacters && observation.result.content.length > 256) {
+            const result = observation.result;
+            let prefix = result.content.slice(0, Math.max(128, Math.floor(result.content.length / 2)));
+            if (/[\ud800-\udbff]$/.test(prefix)) prefix = prefix.slice(0, -1);
+            const parts = prefix.split('\n'), startLine = result.startLine ?? 1, startColumn = result.startColumn ?? 1;
+            const nextLine = startLine + parts.length - 1, nextColumn = parts.length > 1 ? parts.at(-1).length + 1 : startColumn + prefix.length;
+            observation.result = { ...result, content: prefix, complete: false, transportTruncated: true, startLine, startColumn, endLine: nextLine - (prefix.endsWith('\n') ? 1 : 0), nextLine, nextColumn };
+          }
+        }
+        else if (observation.result?.output !== undefined) observation.result = { ...observation.result, output: observation.result.output.slice(-1000), truncated: true };
         else { delete observation.result; observation.error = 'Copilot 입력 한도로 결과 본문을 전달하지 못했습니다. 더 좁은 search_text 또는 작은 파일을 요청하세요.'; }
       }
     } else if (last.role) payload.history = [];
