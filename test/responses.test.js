@@ -10,7 +10,7 @@ test('response parser extracts wrapped JSON without changing source strings', ()
   const value = { requestId: 'wrapped', kind: 'changes', files: [{ path: 'x.js', action: 'create', baseHash: null, content }] };
   const json = JSON.stringify(value, null, 2).replace(/\n  /g, '\n\u00a0\u00a0');
   assert.deepEqual(parseReply('JSON\n코드 복사\n' + json + '\nCopy code', 'wrapped'), value);
-  assert.throws(() => parseReply('{"requestId":"x","kind":"done","message":"a"}\n{"requestId":"x","kind":"done","message":"b"}', 'x'), error => error.code === 'AMBIGUOUS_REPLY');
+  assert.equal(parseReply('{"requestId":"x","kind":"done","message":"a"}\n{"requestId":"x","kind":"done","message":"b"}', 'x').message, 'a\n\nb');
   assert.throws(() => parseReply('{"requestId":"x","kind":"done"}', 'x'), error => error.code === 'INVALID_REPLY_SCHEMA');
   const prompt = buildPrompt({ id: 'never-echo', task: '설명해줘', workspace: 'sample', files: [] });
   assert.throws(() => parseReply(prompt, 'never-echo'), error => error.code === 'REPLY_NOT_FOUND');
@@ -61,7 +61,14 @@ test('Edge collects tenant-style response widgets without clipboard or user inte
       } else if (shape === 'echo') {
         const pre = document.createElement('pre'); pre.textContent = prompt; reply.append(pre);
       } else if (shape === 'conflict') {
-        for (const message of ['first', 'second']) { const pre = document.createElement('pre'); pre.textContent = JSON.stringify({ ...value, message }); reply.append(pre); }
+        for (const content of ['first', 'second']) { const pre = document.createElement('pre'); pre.textContent = JSON.stringify({ requestId: id, kind: 'changes', files: [{ path: 'same.js', action: 'create', baseHash: null, content }] }); reply.append(pre); }
+      } else if (shape === 'multi' || shape === 'transient-conflict') {
+        if (shape === 'transient-conflict') { const stop = document.createElement('button'); stop.textContent = 'Stop generating'; document.body.append(stop); setTimeout(() => stop.remove(), 900); }
+        for (const path of ['first.js', shape === 'multi' ? 'second.js' : 'first.js']) {
+          const pre = document.createElement('pre'); pre.textContent = JSON.stringify({ requestId: id, kind: 'changes', files: [{ path, action: 'create', baseHash: null, content: 'content-' + reply.children.length }] }); reply.append(pre);
+        }
+        if (shape === 'multi') { const pre = document.createElement('pre'); pre.textContent = JSON.stringify(value); reply.append(pre); reply.dataset.messageAuthorRole = 'assistant'; }
+        else setTimeout(() => reply.firstElementChild.remove(), 350);
       }
     };
   }, shape);
@@ -99,5 +106,15 @@ test('Edge collects tenant-style response widgets without clipboard or user inte
     const transport = await fixture();
     await setup(transport, 'conflict');
     await assert.rejects(transport.request('Current requestId: conflict', 'conflict'), /서로 다른 JSON/);
+  });
+  await t.test('per-file JSON blocks plus a done block merge across overlapping DOM containers', async () => {
+    const transport = await fixture(); await setup(transport, 'multi');
+    const reply = await transport.request('Current requestId: multi\n코드 작성해줘', 'multi');
+    assert.equal(reply.kind, 'changes'); assert.deepEqual(reply.files.map(file => file.path), ['first.js', 'second.js']);
+  });
+  await t.test('transient conflicting renderings wait for generation to finish before deciding', async () => {
+    const transport = await fixture(); await setup(transport, 'transient-conflict');
+    const reply = await transport.request('Current requestId: transient\n코드 작성해줘', 'transient');
+    assert.equal(reply.kind, 'changes'); assert.equal(reply.files.length, 1); assert.equal(reply.files[0].content, 'content-1');
   });
 });

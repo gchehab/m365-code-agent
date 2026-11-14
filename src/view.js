@@ -1,9 +1,14 @@
 'use strict';
+function icon(name) {
+  const shapes = { add: '<path d="M12 5v14M5 12h14"/>', history: '<path d="M3 11a9 9 0 1 1 2.6 7.3M3 4v7h7M12 7v5l3 2"/>', more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', close: '<path d="m6 6 12 12M18 6 6 18"/>', sync: '<path d="M20 7h-5m5 0V2M4 17h5m-5 0v5M4 8a8 8 0 0 1 13-5l3 4M4 17l3 4a8 8 0 0 0 13-5"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/>' };
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${shapes[name]}</svg>`;
+}
 function renderWebview({ nonce, cspSource, resource }) {
   return `<!doctype html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${resource('view.css')}"></head><body>
-<header><span class="brand">M365 <b>Code Agent</b></span><div class="toolbar"><button id="newChat" title="새 대화">＋</button><button id="history" title="연결된 대화 기록">기록</button><button id="syncWeb" title="현재 웹 대화 동기화">↻</button><button id="diagnostics" title="연결 진단">⋯</button></div></header>
+<header><span class="brand">M365 <b>Code Agent</b></span><nav class="toolbar header-actions" aria-label="대화 작업"><button id="newChat" class="icon-button" title="새 대화" aria-label="새 대화">${icon('add')}</button><button id="history" class="icon-button" title="대화 기록" aria-label="대화 기록" aria-controls="historyPanel" aria-expanded="false">${icon('history')}</button><button id="more" class="icon-button" title="더 보기" aria-label="더 보기" aria-controls="moreMenu" aria-haspopup="menu" aria-expanded="false">${icon('more')}</button></nav><div id="moreMenu" role="menu" hidden><button id="syncWeb" role="menuitem">${icon('sync')}웹 대화 동기화</button><button id="diagnostics" role="menuitem">${icon('info')}연결 진단</button></div></header>
+<section id="historyPanel" hidden aria-label="대화 기록"><div class="history-heading"><h2>대화 기록</h2><button id="closeHistory" class="icon-button" title="기록 닫기" aria-label="기록 닫기">${icon('close')}</button></div><p class="history-note">이 작업 영역에 저장한 VS Code 기록입니다. 삭제해도 Copilot 웹 대화와 프로젝트 파일은 유지됩니다.</p><input id="historySearch" type="search" placeholder="대화 제목 검색" aria-label="대화 제목 검색"><div id="sessionList" role="list"></div><button id="deleteAllSessions" class="danger-button">모든 VS Code 기록 삭제</button></section>
 <div class="toolbar"><span id="workspaceName" title="프로젝트 경로">프로젝트 미확인</span><button id="checkWorkspace" title="M365 없이 코드 읽기와 임시 파일 쓰기·삭제를 점검합니다.">프로젝트 점검</button></div>
 <main id="messages" aria-live="polite"></main>
 <div id="welcome"><h2>어떤 작업을 할까요?</h2><p>코드를 살펴보고, 계획하고, 함께 수정하세요.</p><button class="suggestion" data-prompt="이 프로젝트의 구조와 실행 방법을 설명해줘.">프로젝트 살펴보기</button><button class="suggestion" data-prompt="현재 파일을 검토하고 버그 가능성과 테스트 계획을 알려줘.">코드 검토 계획</button></div>

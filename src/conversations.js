@@ -38,7 +38,8 @@ class ConversationController {
   saveSession() {
     const host = this.host;
     if (!host.sessionId) host.sessionId = crypto.randomUUID();
-    const session = { id: host.sessionId, title: host.events.find(event => event.role === 'user')?.text.slice(0, 70) || '새 대화', updated: Date.now(), events: host.events, webUrl: host.webUrl, newWebChat: Boolean(host.newWebChat) };
+    const customTitle = host.sessions.find(session => session.id === host.sessionId)?.customTitle;
+    const session = { id: host.sessionId, title: customTitle || host.events.find(event => event.role === 'user')?.text.slice(0, 70) || '새 대화', ...(customTitle ? { customTitle } : {}), updated: Date.now(), events: host.events, webUrl: host.webUrl, newWebChat: Boolean(host.newWebChat) };
     host.sessions = [session, ...host.sessions.filter(item => item.id !== session.id)].slice(0, 20);
     host.context.workspaceState.update('sessions', host.sessions);
     host.context.workspaceState.update('activeSession', host.sessionId);
@@ -58,23 +59,63 @@ class ConversationController {
     host.post({ type: 'status', text: '새 대화 · 작업을 입력하세요.' });
   }
   async showHistory() {
+    return this.selectSession(async () => (await this.vscode.window.showQuickPick(this.summaries().map(item => ({ label: item.title, description: new Date(item.updated).toLocaleString(), id: item.id })), { placeHolder: '이어서 작업할 대화' }))?.id);
+  }
+  summaries() {
     const host = this.host;
-    const vscode = this.vscode;
+    return host.sessions.filter(session => session.events.length || session.customTitle).map(session => ({ id: session.id, title: session.title, updated: session.updated, count: session.events.filter(event => event.type === 'message').length, active: session.id === host.sessionId, linked: Boolean(session.webUrl) }));
+  }
+  publishList() { this.host.view?.webview.postMessage({ type: 'sessions', items: this.summaries() }); }
+  async selectSession(select) {
+    const host = this.host;
     if (host.starting || host.sessionSwitching || host.agent?.running) return;
     this.invalidate(); host.sessionSwitching = true; host.stopRequested = false;
     host.post({ type: 'busy' });
     try {
-      const selected = await vscode.window.showQuickPick(host.sessions.filter(session => session.events.length).map(session => ({ label: session.title, description: new Date(session.updated).toLocaleString(), session })), { placeHolder: '이어서 작업할 대화' });
+      const id = typeof select === 'function' ? await select() : select;
+      const selected = host.sessions.find(session => session.id === id);
       if (!selected || host.stopRequested) return;
-      if (selected.session.webUrl) await this.openWeb(selected.session.webUrl);
+      if (selected.webUrl) await this.openWeb(selected.webUrl);
       if (host.stopRequested) return;
       host.saveSession();
-      host.sessionId = selected.session.id;
-      host.events = selected.session.events;
-      host.webUrl = selected.session.webUrl;
+      host.sessionId = selected.id;
+      host.events = selected.events;
+      host.webUrl = selected.webUrl;
       host.newWebChat = !host.webUrl;
       host.saveSession();
     } finally { host.sessionSwitching = false; host.view?.webview.postMessage(host.state()); host.post({ type: 'idle' }); }
+  }
+  async manageSession(action, id) {
+    const host = this.host, window = this.vscode.window;
+    if (host.starting || host.sessionSwitching || host.agent?.running) throw new Error('진행 중인 작업을 마친 뒤 기록을 관리하세요.');
+    if (!['rename', 'delete', 'deleteAll'].includes(action)) return;
+    const session = host.sessions.find(item => item.id === id);
+    if (action !== 'deleteAll' && !session) return;
+    this.invalidate(); host.sessionSwitching = true; host.post({ type: 'busy' });
+    const revision = this.revision;
+    try {
+      if (action === 'rename') {
+        const title = await window.showInputBox({ title: 'VS Code 대화 이름 변경', value: session.title, prompt: 'VS Code 기록에 표시할 제목(최대 80자). Copilot 웹 제목은 유지됩니다.', validateInput: value => !value.trim() ? '제목을 입력하세요.' : value.trim().length > 80 ? '80자 이하로 입력하세요.' : undefined });
+        if (title === undefined || this.revision !== revision) return;
+        if (typeof title !== 'string' || !title.trim() || title.trim().length > 80) throw new Error('제목은 1~80자로 입력하세요.');
+        session.title = session.customTitle = title.trim();
+      } else {
+        const targetIds = new Set(action === 'deleteAll' ? host.sessions.map(item => item.id) : [id]);
+        const label = action === 'deleteAll' ? '이 작업 영역의 VS Code 대화 기록을 모두 삭제할까요?' : `“${session.title}”의 VS Code 대화 기록을 삭제할까요?`;
+        if (await window.showWarningMessage(label, { modal: true, detail: 'Copilot 웹 대화와 프로젝트 파일은 삭제하지 않습니다.' }, '삭제') !== '삭제') return;
+        if (this.revision !== revision) return;
+        host.sessions = host.sessions.filter(item => !targetIds.has(item.id));
+        if (targetIds.has(host.sessionId)) {
+          host.sessionId = crypto.randomUUID(); host.events = []; host.webUrl = undefined; host.newWebChat = true; host.attachments = [];
+          host.saveSession();
+        }
+      }
+      await host.context.workspaceState.update('sessions', host.sessions);
+      host.post({ type: 'status', text: action === 'rename' ? '대화 이름을 변경했습니다.' : '선택한 VS Code 대화 기록을 삭제했습니다. 웹 대화는 유지됩니다.' });
+    } finally {
+      host.sessionSwitching = false; this.publishList();
+      host.view?.webview.postMessage(host.state()); host.post({ type: 'idle' });
+    }
   }
   async syncWeb(manual = true) {
     const host = this.host;

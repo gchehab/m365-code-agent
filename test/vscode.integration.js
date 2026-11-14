@@ -165,6 +165,7 @@ async function run() {
     const context = await browser.newContext();
     await context.route('https://m365.cloud.microsoft/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<textarea id="userInput"></textarea><button id="send">보내기</button><button disabled>Stop generating</button><main><section><div id="answer"></div></section></main><script>
 document.querySelector('#send').onclick=()=>{const input=document.querySelector('textarea');const prompt=input.value;const id=prompt.match(/Current requestId: ([^\\s]+)/)[1];const data=JSON.parse(prompt.slice(prompt.indexOf(' DATA: ')+7));input.value='';let reply={requestId:id,kind:'done',message:'실제 VS Code 자동 응답 수집 확인'};
+if(data.task.includes('샘플 코드')){window.multiRound=(window.multiRound||0)+1;if(window.multiRound===1){const answer=document.querySelector('#answer');answer.replaceChildren();for(const file of [{path:'samples/add.js',action:'create',baseHash:null,content:'exports.add = (a, b) => a + b;\\n'},{path:'samples/add.test.js',action:'create',baseHash:null,content:'const assert = require("node:assert/strict"); const {add} = require("./add"); assert.equal(add(1,2),3);\\n'}]){const pre=document.createElement('pre');pre.textContent=JSON.stringify({requestId:id,kind:'changes',files:[file]});answer.append(pre);}const done=document.createElement('pre');done.textContent=JSON.stringify({requestId:id,kind:'done',message:'두 파일의 코드를 준비했습니다.'});answer.append(done);return;}window.multiAppliedSeen=data.history.some(x=>x.kind==='change_result'&&x.applied&&x.files.includes('samples/add.js'));reply={requestId:id,kind:'done',message:'다중 JSON 파일 저장 확인'};}
 if(data.task.includes('src/target.js')){window.editRound=(window.editRound||0)+1;const observations=data.history.filter(x=>x.kind==='tool_results').flatMap(x=>x.observations);const file=[...observations].reverse().find(x=>x.result&&x.result.path==='src/target.js');
 if(window.editRound===1){window.bootstrapSeen=!!file&&file.result.content.includes('exports.value = 1;');reply={requestId:id,kind:'tools',calls:[{name:'read_file',arguments:JSON.stringify({path:'./src/target.js',startLine:1,lineCount:3})}]};}
 else if(window.editRound===2){const oldText=file.result.content.split('\\n')[0];reply={requestId:id,kind:'changes',files:[{path:'src/target.js',action:'edit',baseHash:file.result.hash,edits:[{oldText,newText:oldText.replace('1;','2;')}]}]};}
@@ -185,7 +186,22 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(await chat.evaluate(() => window.bootstrapSeen), true);
     assert.equal(await chat.evaluate(() => window.editRound), 3);
     assert.equal(await fs.readFile(path.join(root, 'src', 'target.js'), 'utf8'), target.replace('exports.value = 1;', 'exports.value = 2;'));
+    await provider.start({ task: '샘플 코드 작성해줘. 함수와 테스트를 각각 파일로 만들어줘.', includeEditor: false, review: false });
+    assert.equal(await chat.evaluate(() => window.multiRound), 2);
+    assert.equal(await chat.evaluate(() => window.multiAppliedSeen), true);
+    assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
+    assert.match(await fs.readFile(path.join(root, 'samples/add.test.js'), 'utf8'), /assert.equal/);
   } finally { await browser.close(); }
+  const historyApi = provider.conversations.vscode;
+  try {
+    provider.conversations.vscode = { window: { async showInputBox() { return '샘플 코드 작업'; }, async showWarningMessage() { return '삭제'; } } };
+    const id = provider.sessionId;
+    await provider.conversations.manageSession('rename', id); provider.saveSession();
+    assert.equal(provider.context.workspaceState.get('sessions').find(session => session.id === id).title, '샘플 코드 작업');
+    await provider.conversations.manageSession('delete', id);
+    assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
+    assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
+  } finally { provider.conversations.vscode = historyApi; }
   const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }

@@ -1,5 +1,6 @@
 'use strict';
-const { parseReply, replyIdentity } = require('./protocol');
+const { parseReply, replyIdentity, mergeReplies } = require('./protocol');
+const { createHash } = require('node:crypto');
 const { normalizeDraft, matchesPrompt, readComposer, promptLimitError, isAgentProtocolDraft } = require('./composer');
 const { scanResponses, defaultResponses } = require('./responses');
 const { conversationUrl } = require('./web-history');
@@ -264,23 +265,33 @@ class CopilotBrowser {
       this.lastResponse = { stage: 'waiting' };
       onStatus('전송 확인됨 · Copilot 응답을 기다리고 있습니다…');
       const deadline = Date.now() + (this.options.timeoutSeconds || 240) * 1000;
-      let candidateText = '', stableSince = 0, lastStage = '';
+      let candidateText = '', stableSince = 0, lastStage = '', conflictSignature = '', conflictSince = 0;
       while (Date.now() < deadline) {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         if (this.page.isClosed()) throw new Error('Copilot 브라우저 창이 닫혔습니다.');
         validateCopilotUrl(this.page.url());
         const blocks = await this.responseCandidates(id, prompt);
-        let found, matching = 0, parseError, ambiguous = false;
-        const parsed = new Map();
+        let found, matching = 0, parseError;
+        const parsed = [], conflicts = [];
         for (const text of blocks) {
           if (baseline.has(text) || !text.includes(id)) continue;
           matching++;
-          try { const value = parseReply(text, id); parsed.set(replyIdentity(value), value); }
-          catch (error) { parseError = error.code || 'REPLY_NOT_FOUND'; ambiguous ||= error.code === 'AMBIGUOUS_REPLY'; }
+          try { parsed.push(parseReply(text, id)); }
+          catch (error) { parseError = error.code || 'REPLY_NOT_FOUND'; if (error.code === 'AMBIGUOUS_REPLY') conflicts.push(error); }
         }
-        if (parsed.size > 1 || ambiguous) throw new Error('현재 요청의 서로 다른 JSON 응답이 여러 개 감지되어 적용하지 않았습니다.');
-        found = parsed.values().next().value;
+        if (!conflicts.length) { try { found = mergeReplies(parsed, id); } catch (error) { conflicts.push(error); } }
         const generating = await this.generationActive();
+        if (conflicts.length) {
+          const signature = createHash('sha256').update([...new Set([...conflicts.map(error => error.signature || error.code), ...parsed.map(replyIdentity)])].sort().join('\0')).digest('hex');
+          if (signature !== conflictSignature) { conflictSignature = signature; conflictSince = Date.now(); }
+          candidateText = ''; stableSince = 0;
+          this.lastResponse = { stage: 'json-conflict', ...this.responseScan, matchingRequestId: matching, parsed: false, generating, parseError: conflicts[0].code };
+          if (!generating && Date.now() - conflictSince >= (this.options.responseStableMs ?? 2500)) throw conflicts[0];
+          if (lastStage !== 'json-conflict') onStatus('여러 JSON 수정안 확인 중 · 응답 완료 후 충돌을 검증합니다…');
+          lastStage = 'json-conflict';
+          await this.page.waitForTimeout(500); continue;
+        }
+        conflictSignature = ''; conflictSince = 0;
         const stage = found ? 'json-confirmed' : matching ? 'json-incomplete' : 'waiting';
         this.lastResponse = { stage, ...this.responseScan, matchingRequestId: matching, parsed: Boolean(found), generating, parseError: found ? null : parseError || null };
         if (found) {

@@ -15,7 +15,7 @@ function fixture() {
     browser: { page, context: { async newPage() { newPages++; return page; } }, async newChat() { newChats++; url = 'https://m365.cloud.microsoft/chat'; }, async waitForComposer() {}, async readConversation() { return { url, restorable: true, messages: [] }; } },
     post() {}, state: () => ({}), async ensureBrowser() { return this.browser; }
   };
-  const controller = new ConversationController(host, { window: { async showQuickPick(items) { return items.find(item => item.session.id === next); } } });
+  const controller = new ConversationController(host, { window: { async showQuickPick(items) { return items.find(item => item.id === next); } } });
   host.saveSession = () => controller.saveSession();
   return { host, controller, choose: value => { next = value; }, navigate: value => { url = value; }, newPages: () => newPages, newChats: () => newChats };
 }
@@ -122,4 +122,51 @@ test('command approval separates current-task changes from retained earlier chan
   assert.equal(files.find(file => file.path === 'src/main.js').currentTask, true);
   host.pending.resolve(false);
   assert.equal((await pending).approved, false);
+});
+
+test('renaming a conversation persists across subsequent message saves without navigating the web', async () => {
+  const { host, controller, newPages, newChats } = fixture();
+  controller.vscode.window.showInputBox = async () => '새 프로젝트 분석';
+  await controller.manageSession('rename', 'a');
+  host.events.push({ type: 'message', role: 'assistant', text: '후속 답변' }); host.saveSession();
+  assert.equal(controller.summaries().find(item => item.id === 'a').title, '새 프로젝트 분석');
+  assert.equal(newPages(), 0); assert.equal(newChats(), 0);
+});
+
+test('deleting a conversation requires confirmation and cannot resurrect it from an in-flight sync', async () => {
+  const { host, controller, newChats } = fixture();
+  controller.vscode.window.showWarningMessage = async () => undefined;
+  await controller.manageSession('delete', 'a');
+  assert.equal(host.sessionId, 'a');
+  let finish;
+  host.browser.readConversation = () => new Promise(resolve => { finish = resolve; });
+  const syncing = controller.syncWeb();
+  controller.vscode.window.showWarningMessage = async (_message, options) => { assert.match(options.detail, /프로젝트 파일은 삭제하지/); return '삭제'; };
+  await controller.manageSession('delete', 'a');
+  const fresh = host.sessionId;
+  finish({ url: 'https://m365.cloud.microsoft/chat?threadId=a', restorable: true, messages: [{ type: 'message', role: 'user', text: 'OLD' }] });
+  await syncing;
+  assert.notEqual(fresh, 'a'); assert.equal(host.sessionId, fresh);
+  assert.equal(host.sessions.some(item => item.id === 'a'), false); assert.deepEqual(host.events, []);
+  assert.equal(host.newWebChat, true); assert.equal(newChats(), 0);
+});
+
+test('bulk history deletion removes local records, preserves unrelated workspace state, and respects busy tasks', async () => {
+  const { host, controller } = fixture();
+  const checkpoint = { original: 'workspace source' }; host.checkpoints = [checkpoint];
+  controller.vscode.window.showWarningMessage = async () => '삭제';
+  host.starting = true;
+  await assert.rejects(controller.manageSession('deleteAll'), /작업을 마친 뒤/);
+  host.starting = false;
+  await controller.manageSession('deleteAll');
+  assert.deepEqual(controller.summaries(), []); assert.deepEqual(host.checkpoints, [checkpoint]);
+  assert.equal(host.sessions.some(item => ['a', 'b'].includes(item.id)), false);
+});
+
+test('a stale history confirmation after cancellation cannot delete local records', async () => {
+  const { host, controller } = fixture();
+  controller.vscode.window.showWarningMessage = async () => { controller.invalidate(); return '삭제'; };
+  await controller.manageSession('deleteAll');
+  assert.equal(host.sessions.some(session => session.id === 'a'), true);
+  assert.equal(host.sessionId, 'a');
 });

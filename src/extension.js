@@ -59,7 +59,7 @@ class AgentView {
   }
   saveSession() { return this.conversations.saveSession(); }
   state() {
-    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress };
+    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress, sessions: this.conversations.summaries() };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -155,7 +155,7 @@ class AgentView {
     this.post({ type: 'message', role: 'system', text: `연결 진단\n주소: ${data.url}\n입력창: ${data.composer}\n페이지 프레임: ${data.frames}\n최근 전송: ${data.lastSend?.stage || '없음'}${data.lastSend ? `\n입력: 요청 ${data.lastSend.characters}자 / 확인 ${data.lastSend.observedCharacters ?? '?'}자 / 한도 ${data.lastSend.maxLength ?? '미표시'}` : ''}` });
     if (data.lastResponse) {
       const response = data.lastResponse;
-      const stage = { 'not-submitted': '전송 전', waiting: '응답 영역 대기', 'json-incomplete': '요청 ID 발견·JSON 수집 중', 'json-confirmed': 'JSON 확인·생성 종료 대기', complete: '수집 완료' }[response.stage] || response.stage;
+      const stage = { 'not-submitted': '전송 전', waiting: '응답 영역 대기', 'json-incomplete': '요청 ID 발견·JSON 수집 중', 'json-conflict': '여러 JSON 충돌 확인 중', 'json-confirmed': 'JSON 확인·생성 종료 대기', complete: '수집 완료' }[response.stage] || response.stage;
       this.post({ type: 'message', role: 'system', text: `응답 수집 진단\n단계: ${stage}\n응답 후보: ${response.candidates || 0}개 / 현재 요청 ID: ${response.matchingRequestId || 0}개\nJSON: ${response.parsed ? '확인됨' : '미확인'} / 생성 상태: ${response.generating ? '진행 중' : '종료 또는 미감지'}\n수집 경로: ${response.sources?.join(', ') || '없음'}${response.parseError ? '\n해석 상태: ' + response.parseError : ''}` });
     }
   }
@@ -241,6 +241,11 @@ class AgentView {
     if (message.type === 'openLink' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) return vscode.env.openExternal(vscode.Uri.parse(message.url));
     if (message.type === 'checkWorkspace') return this.checkWorkspace();
     if (message.type === 'history') return this.showHistory();
+    if (message.type === 'listSessions') return this.conversations.publishList();
+    if (message.type === 'openSession') return this.conversations.selectSession(message.id);
+    if (message.type === 'renameSession') return this.conversations.manageSession('rename', message.id);
+    if (message.type === 'deleteSession') return this.conversations.manageSession('delete', message.id);
+    if (message.type === 'deleteAllSessions') return this.conversations.manageSession('deleteAll');
     if (message.type === 'attach') return this.attachFiles();
     if (message.type === 'removeAttachment' && !this.starting) { this.attachments = this.attachments.filter(file => file !== message.path); this.view.webview.postMessage({ type: 'attachments', files: this.attachments }); return; }
     if (message.type === 'undo') return this.undo();

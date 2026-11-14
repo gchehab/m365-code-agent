@@ -96,6 +96,38 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await fs.mkdir(path.join(root, '.test-output'), { recursive: true });
   await page.screenshot({ path: path.join(root, '.test-output', 'agent-ui.png') });
 
+  await page.getByRole('button', { name: '더 보기', exact: true }).click();
+  assert.equal(await page.getByRole('menu').isVisible(), true);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.getByRole('menuitem', { name: '연결 진단' }).evaluate(element => element === document.activeElement), true);
+  await page.getByRole('menuitem', { name: '연결 진단' }).click();
+  assert.equal(await page.getByRole('menu').isVisible(), false);
+  assert.ok((await page.evaluate(() => window.sent)).some(message => message.type === 'diagnostics'));
+  await page.getByRole('button', { name: '대화 기록', exact: true }).click();
+  assert.equal(await page.locator('#historyPanel').isVisible(), true);
+  assert.ok((await page.evaluate(() => window.sent)).some(message => message.type === 'listSessions'));
+  await host({ type: 'sessions', items: [{ id: 'one', title: '프로젝트 분석', count: 4, updated: Date.now(), active: true, linked: true }, { id: 'two', title: '<img src=x onerror=alert(1)> 쇼핑몰 코드 작성', count: 2, updated: Date.now() }] });
+  assert.equal(await page.locator('.session-row').count(), 2);
+  assert.equal(await page.locator('#sessionList img').count(), 0);
+  await page.locator('#historySearch').fill('쇼핑몰');
+  assert.equal(await page.locator('.session-row').count(), 1);
+  await page.getByRole('button', { name: '이름 변경', exact: true }).click();
+  assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'renameSession'))).id, 'two');
+  await page.getByRole('button', { name: '삭제', exact: true }).click();
+  assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'deleteSession'))).id, 'two');
+  await page.locator('#historySearch').fill('');
+  await host({ type: 'sessions', items: [{ id: 'one', title: '프로젝트 구조 분석', count: 4, updated: Date.now(), active: true, linked: true }, { id: 'two', title: '쇼핑몰 상품 목록 컴포넌트 작성', count: 2, updated: Date.now() }] });
+  for (const width of [280, 360]) {
+    await page.setViewportSize({ width, height: 800 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  }
+  await page.screenshot({ path: path.join(root, '.test-output', 'history-ui.png') });
+  await page.getByRole('button', { name: '모든 VS Code 기록 삭제' }).click();
+  assert.ok((await page.evaluate(() => window.sent)).some(message => message.type === 'deleteAllSessions'));
+  await page.locator('.session-open').first().click();
+  assert.equal(await page.locator('#historyPanel').isVisible(), false);
+  assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'openSession'))).id, 'one');
+
   // Exercise the host's actual conversation mapping without calling a model or file tool.
   view.webview.postMessage = noop;
   let snapshot = { url: 'https://m365.cloud.microsoft/chat?threadId=one', restorable: true, messages: [{ type: 'message', role: 'user', text: '첫 대화', webId: 'one:1' }] };

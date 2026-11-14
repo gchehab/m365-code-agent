@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Merge compatible current-request JSON across separate code blocks and overlapping response containers: per-file proposals, nonconflicting partial edits, distinct tool calls and explanatory completions.
+- Keep blocking conflicting same-file content/hashes. Wait for transient streaming conflicts to settle before rejecting; retain local read/hash/unique-anchor/overlap validation.
+- Execute tools before premature changes/done in the same response and request fresh proposals from the actual tool results; never replay those premature changes.
+- Use consistent SVG header icons with Korean accessible labels. Move synchronization and diagnostics into the More menu.
+- Add a conversation-history panel with title search, opening, persistent custom titles and confirmed individual/bulk deletion. Changes affect local VS Code records only; web originals and workspace files remain untouched.
+
 ## 0.5.2
 
 - Always review dot-rc JavaScript/TypeScript files, setup hooks and pre-commit configs in addition to the existing execution-config policy.

@@ -8,6 +8,7 @@ let composing = false;
 let reviewToken, commandToken;
 let pendingTask = saved.pendingTask || null;
 const tools = new Map();
+let sessions = [];
 el('task').value = saved.draft || '';
 el('review').checked = saved.review !== false;
 el('includeEditor').checked = saved.includeEditor !== false;
@@ -15,7 +16,10 @@ function persist() { api.setState({ draft: el('task').value, pendingTask, review
 function busy(value) {
   running = value;
   if (!value) progress(null);
-  for (const id of ['run', 'connect', 'newChat', 'history', 'attach', 'model', 'refreshModels', 'syncWeb', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
+  for (const id of ['run', 'connect', 'newChat', 'history', 'more', 'attach', 'model', 'refreshModels', 'syncWeb', 'diagnostics', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
+  for (const control of el('historyPanel').querySelectorAll('button,input')) control.disabled = value;
+  el('deleteAllSessions').disabled = value || !sessions.length;
+  if (value) toggleMore(false);
   el('stop').hidden = !value;
   el('run').hidden = value;
   el('status').classList.toggle('working', value);
@@ -72,11 +76,51 @@ el('task').addEventListener('keydown', event => {
   if (event.key === 'Escape' && running) send('stop');
 });
 for (const id of ['task', 'review', 'includeEditor']) el(id).addEventListener('input', persist);
-for (const id of ['connect', 'newChat', 'history', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand', 'checkWorkspace', 'refreshModels', 'syncWeb']) el(id).addEventListener('click', () => {
+for (const id of ['connect', 'newChat', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand', 'checkWorkspace', 'refreshModels', 'syncWeb']) el(id).addEventListener('click', () => {
+  toggleMore(false);
+  if (id === 'newChat') showHistory(false);
   if (['apply', 'reject'].includes(id)) closeReview();
   if (['approveCommand', 'rejectCommand'].includes(id)) el('approval').hidden = true;
   api.postMessage({ type: id, token: ['apply', 'reject'].includes(id) ? reviewToken : ['approveCommand', 'rejectCommand'].includes(id) ? commandToken : undefined });
 });
+function toggleMore(open) { el('moreMenu').hidden = !open; el('more').setAttribute('aria-expanded', String(open)); if (open) el('moreMenu').querySelector('button:not(:disabled)')?.focus(); }
+function showHistory(open) {
+  el('historyPanel').hidden = !open; el('history').setAttribute('aria-expanded', String(open)); toggleMore(false);
+  if (open) { send('listSessions'); el('historySearch').focus(); } else el('task').focus();
+}
+function renderSessions() {
+  const query = el('historySearch').value.trim().toLowerCase();
+  const filtered = sessions.filter(item => item.title.toLowerCase().includes(query));
+  el('sessionList').replaceChildren();
+  if (!filtered.length) {
+    const empty = document.createElement('p'); empty.className = 'history-empty'; empty.textContent = sessions.length ? '일치하는 대화가 없습니다.' : '저장된 대화가 없습니다.'; el('sessionList').append(empty);
+  }
+  for (const item of filtered) {
+    const row = document.createElement('article'); row.className = 'session-row'; row.setAttribute('role', 'listitem'); row.classList.toggle('active', Boolean(item.active));
+    const open = document.createElement('button'); open.className = 'session-open'; open.textContent = item.title; open.title = item.title;
+    open.addEventListener('click', () => { if (!running) { showHistory(false); api.postMessage({ type: 'openSession', id: item.id }); } });
+    const meta = document.createElement('p'); meta.className = 'session-meta'; meta.textContent = `${item.active ? '현재 대화 · ' : ''}${new Date(item.updated).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · 메시지 ${item.count}개${item.linked ? ' · 웹 연결' : ''}`;
+    const actions = document.createElement('div'); actions.className = 'session-actions';
+    for (const [type, label] of [['renameSession', '이름 변경'], ['deleteSession', '삭제']]) {
+      const button = document.createElement('button'); button.textContent = label; button.disabled = running; if (type === 'deleteSession') button.className = 'danger-button';
+      button.addEventListener('click', () => { if (!running) api.postMessage({ type, id: item.id }); }); actions.append(button);
+    }
+    open.disabled = running; row.append(open, meta, actions); el('sessionList').append(row);
+  }
+  el('deleteAllSessions').disabled = running || !sessions.length;
+}
+el('more').addEventListener('click', () => toggleMore(el('moreMenu').hidden));
+el('moreMenu').addEventListener('keydown', event => {
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+  event.preventDefault(); const items = [...el('moreMenu').querySelectorAll('button:not(:disabled)')], index = items.indexOf(document.activeElement);
+  items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+});
+el('history').addEventListener('click', () => showHistory(el('historyPanel').hidden));
+el('closeHistory').addEventListener('click', () => showHistory(false));
+el('historySearch').addEventListener('input', renderSessions);
+el('deleteAllSessions').addEventListener('click', () => { if (!running) send('deleteAllSessions'); });
+document.addEventListener('click', event => { if (!event.target.closest('#more,#moreMenu')) toggleMore(false); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { if (!el('moreMenu').hidden) { toggleMore(false); el('more').focus(); } else if (!el('historyPanel').hidden) showHistory(false); } });
 for (const button of document.querySelectorAll('.suggestion')) button.addEventListener('click', () => {
   el('task').value = button.dataset.prompt; persist(); el('task').focus();
 });
@@ -101,6 +145,7 @@ window.addEventListener('message', ({ data }) => {
   }
   if (data.type === 'models') models(data.choices, data.selected);
   if (data.type === 'progress') progress(data);
+  if (data.type === 'sessions') { sessions = data.items || []; renderSessions(); }
   if (data.type === 'webConversation') { el('webSync').textContent = data.url ? '웹 기록 연결됨' : 'M365 Copilot'; el('webSync').title = data.url ? '5초마다 현재 웹 대화 동기화 · ' + data.url : '연결된 웹 대화를 5초마다 확인합니다.'; }
   if (data.type === 'history') {
     el('messages').replaceChildren(); tools.clear(); el('welcome').hidden = Boolean(data.events.length);
@@ -109,6 +154,7 @@ window.addEventListener('message', ({ data }) => {
     if (data.pending) window.dispatchEvent(new MessageEvent('message', { data: data.pending }));
     if (data.workspace) window.dispatchEvent(new MessageEvent('message', { data: { type: 'workspace', ...data.workspace } }));
     models(data.models, data.selectedModel);
+    sessions = data.sessions || []; renderSessions();
     progress(data.running ? data.progress : null);
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'webConversation', url: data.webUrl } }));
     if (!data.running && pendingTask) { if (!el('task').value.trim()) el('task').value = pendingTask.task; pendingTask = null; persist(); }

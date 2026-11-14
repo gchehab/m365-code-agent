@@ -49,6 +49,7 @@ class CodingAgent {
           return { status: 'done', message: reply.message, appliedFiles };
         }
         if (reply.kind === 'tools') {
+          if (reply.deferred?.length) this.emit({ type: 'status', text: '도구 요청을 먼저 처리합니다. 함께 온 수정안은 도구 결과 확인 뒤 다시 받습니다.' });
           const observations = [];
           const batchLimit = toolCallLimit(promptBudget);
           for (const [index, rawCall] of reply.calls.entries()) {
@@ -82,7 +83,7 @@ class CodingAgent {
               this.emit({ type: 'tool', id: toolId, label, state: 'error', detail: error.message });
             }
           }
-          history.push({ kind: 'tool_results', observations });
+          history.push({ kind: 'tool_results', observations, ...(reply.deferred?.length ? { note: 'Premature changes/done in the same response were NOT applied. Re-propose needed changes using these actual results and hashes; return done only after local outcomes.' } : {}) });
           continue;
         }
         if (reply.kind === 'changes') {
