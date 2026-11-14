@@ -89,6 +89,11 @@ test('UTF-16 BOM source files can be read without being mistaken for binary', as
 
 test('natural-language questions cannot be forced into edits and unknown edit wording retains tools', async t => {
   const { resolveTask } = require('../src/task');
+  assert.deepEqual(resolveTask('/ask README 수정해줘'), { mode: 'ask', task: 'README 수정해줘' });
+  assert.deepEqual(resolveTask('/agent 왜 수정이 필요한지 설명해줘'), { mode: 'agent', task: '왜 수정이 필요한지 설명해줘' });
+  assert.equal(resolveTask('/ASK').mode, 'ask'); assert.ok(resolveTask('/ASK').task.length > 0);
+  assert.equal(resolveTask('/agent').mode, 'agent'); assert.ok(resolveTask('/agent').task.length > 0);
+  assert.equal(resolveTask('/asker 이름 설명해줘').task, '/asker 이름 설명해줘');
   const edits = ['README 업데이트해줘', '리팩토링해줘', '정리해줘', '개선해줘', '로그 넣어줘', '빈 배열은 null로 반환하고 회귀 테스트도 생성해줘.', 'explain and fix the bug', '설명하고 버그를 고쳐줘'];
   for (const task of edits) assert.equal(resolveTask(task).mode, 'agent', task);
   const questions = ['어떻게 수정하면 좋을지 알려줘', '왜 수정이 필요한지 설명해줘', '수정하지 말고 설명해줘.', '구현 계획을 알려줘.', '앞의 작업을 설명해줘.', 'Explain how to fix this bug'];
@@ -101,6 +106,20 @@ test('natural-language questions cannot be forced into edits and unknown edit wo
     assert.equal((await agent.run(resolved.task)).appliedFiles, 0);
     assert.equal(requests, 1, task); assert.equal(approvals, 0, task);
   }
+});
+
+test('default budget permits more than twelve rounds and configured limits still stop execution', async t => {
+  const { store } = await fixture(t); const events = []; let count = 0;
+  const transport = { async request() { if (++count <= 12) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/main.js' }] }; return { kind: 'done', message: '13번째 요청에서 완료' }; } };
+  const agent = new CodingAgent({ store, emit: event => events.push(event), transport });
+  assert.equal((await agent.run('프로젝트를 분석해줘')).status, 'done');
+  assert.equal(count, 13);
+  const progress = events.filter(event => event.type === 'progress');
+  assert.equal(progress[0].total, 20); assert.equal(progress.at(-1).remaining, 7);
+  count = 0;
+  const limited = new CodingAgent({ store, maxRounds: 2, emit: () => {}, transport });
+  await assert.rejects(limited.run('프로젝트를 분석해줘'), /최대 요청 횟수/);
+  assert.equal(count, 2);
 });
 
 test('a read-only question rejects model-proposed changes instead of invoking approval/apply', async t => {

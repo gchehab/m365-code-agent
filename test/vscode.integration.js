@@ -90,6 +90,22 @@ async function run() {
   await provider.undo();
   assert.equal(await fs.readFile(readmePath, 'utf8'), 'Before\n');
 
+  // A stop received after browser preparation but before agent construction must
+  // not be lost when the next CodingAgent would reset its cancellation state.
+  let cancelledSends = 0;
+  provider.browser.context = {};
+  provider.browser.waitForComposer = async () => {};
+  provider.browser.readConversation = async () => {
+    await provider.stop();
+    return { url: 'https://m365.cloud.microsoft/chat', restorable: false, messages: [] };
+  };
+  provider.browser.request = async () => { cancelledSends++; return { kind: 'done', message: '중지 후 실행되면 안 됩니다.' }; };
+  await provider.start({ task: 'README 업데이트해줘', includeEditor: false, review: false });
+  assert.equal(cancelledSends, 0);
+  assert.equal(await fs.readFile(readmePath, 'utf8'), 'Before\n');
+  delete provider.browser.context; delete provider.browser.waitForComposer; delete provider.browser.readConversation;
+  provider.agent = null; provider.stopRequested = false;
+
   // Disabling normal review cannot bypass review of executable configuration.
   const { WorkspaceStore } = require('../src/workspace');
   const guardedStore = await new WorkspaceStore(root).initialize();

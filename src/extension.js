@@ -29,7 +29,6 @@ class AgentView {
     this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
     this.webUrl = this.sessions.find(session => session.id === this.sessionId)?.webUrl;
     this.newWebChat = this.sessions.find(session => session.id === this.sessionId)?.newWebChat || false;
-    this.webPages = new Map();
     this.modelChoices = [];
     this.attachments = [];
     this.checkpoints = [];
@@ -46,6 +45,8 @@ class AgentView {
     this.syncTimer.unref();
   }
   post(event) {
+    if (event.type === 'progress') this.progress = event;
+    if (event.type === 'idle') this.progress = null;
     if (['message', 'tool'].includes(event.type)) {
       const existing = event.type === 'tool' ? this.events.findIndex(item => item.type === 'tool' && item.id === event.id) : -1;
       if (existing >= 0) this.events[existing] = event;
@@ -58,7 +59,7 @@ class AgentView {
   }
   saveSession() { return this.conversations.saveSession(); }
   state() {
-    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel };
+    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -212,6 +213,7 @@ class AgentView {
         const snapshot = await browser.readConversation();
         if (!this.webUrl || snapshot.url === this.webUrl) { this.events = mergeHistory(this.events, snapshot.messages); if (snapshot.restorable) this.webUrl = snapshot.url; this.saveSession(); this.view?.webview.postMessage(this.state()); }
       }
+      if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
         mode, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
         maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),

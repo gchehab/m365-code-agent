@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -121,7 +121,7 @@
         },
         "m365Agent.maxRounds": {
           "type": "number",
-          "default": 12,
+          "default": 20,
           "minimum": 1,
           "maximum": 30
         },

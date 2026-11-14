@@ -62,6 +62,9 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await host({ type: 'tool', id: 'read-1', label: 'read_file · src/average.js', state: 'running' });
   await host({ type: 'tool', id: 'read-1', label: 'read_file · src/average.js', state: 'done' });
   assert.equal(await page.locator('.tool').count(), 1);
+  await host({ type: 'progress', round: 3, total: 20, remaining: 17 });
+  await host({ type: 'status', text: '웹 응답을 수집하고 있습니다.' });
+  assert.equal(await page.locator('#roundProgress').textContent(), 'Copilot 요청 3/20 · 이후 17회');
   await host(decorate({ type: 'message', role: 'assistant', text: '## 변경 결과\n\n빈 배열에는 null을 반환하도록 수정합니다.\n```js\naverage([]) === null\n```\n\n| 파일 | 결과 |\n| --- | --- |\n| average.js | 완료 |' }));
   assert.equal(await page.locator('.markdown h2').textContent(), '변경 결과');
   assert.equal(await page.locator('.markdown table').count(), 1);
@@ -78,6 +81,7 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await page.locator('#approveCommand').click();
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'approveCommand'))).token, 'cmd-123');
   await host({ type: 'idle' });
+  assert.equal(await page.locator('#roundProgress').isVisible(), false);
   await host({ type: 'models', choices: [{ id: 'real-id', label: '계정에서 읽은 모델' }], selected: '' });
   await page.locator('#model').selectOption('real-id');
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'selectModel'))).id, 'real-id');

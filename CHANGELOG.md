@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2
+
+- Always review dot-rc JavaScript/TypeScript files, setup hooks and pre-commit configs in addition to the existing execution-config policy.
+- Add `/ask` and `/agent` as explicit overrides without a mode picker or forced-edit retries.
+- Increase the default round limit from 12 to 20; show the current request and remaining rounds independently of browser status messages. Explicitly configured limits remain respected.
+- Remove the redundant session-to-page map and use the browser's single active page directly.
+- Add new-chat lifecycle, retry and cancellation coverage alongside the existing stale-sync race tests. Reject cancellation received during web preparation or immediately before agent construction.
+
 ## 0.5.1
 
 - Remove word-triggered forced-edit retries. Unknown edit wording retains normal tools; explicit explanation/advice questions and read-only shortcuts cannot apply changes. Report the actual applied-file count separately from model text.

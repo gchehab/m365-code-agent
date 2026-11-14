@@ -7,15 +7,6 @@ const { readComposer } = require('./composer');
 class ConversationController {
   constructor(host, vscode) { this.host = host; this.vscode = vscode; this.revision = 0; }
   invalidate() { this.revision++; }
-  prunePages() {
-    for (const [id, page] of this.host.webPages) if (page.isClosed()) this.host.webPages.delete(id);
-  }
-  linkPage() {
-    this.prunePages();
-    // Reuse the single active automation tab; old conversations remain restorable by URL.
-    this.host.webPages.clear();
-    if (this.host.browser?.page && !this.host.browser.page.isClosed()) this.host.webPages.set(this.host.sessionId, this.host.browser.page);
-  }
   async protectWebDraft(browser) {
     if (browser.generationActive && await browser.generationActive()) throw new Error('웹에서 응답을 생성 중입니다. 완료 후 대화를 전환하세요.');
     if (!browser.getComposer) return;
@@ -34,15 +25,15 @@ class ConversationController {
   }
   async prepareWeb() {
     const host = this.host, browser = host.browser;
-    this.prunePages();
+    const revision = this.revision, sessionId = host.sessionId;
     if (host.webUrl) await this.openWeb(host.webUrl);
     else if (host.newWebChat) {
       await this.protectWebDraft(browser);
       await browser.newChat();
       await browser.waitForComposer(text => host.post({ type: 'status', text }));
-      host.newWebChat = false;
     }
-    this.linkPage();
+    if (host.stopRequested || this.revision !== revision || host.sessionId !== sessionId) throw new Error('작업을 중지했습니다.');
+    host.newWebChat = false;
   }
   saveSession() {
     const host = this.host;
@@ -55,7 +46,7 @@ class ConversationController {
   async newChat() {
     const host = this.host;
     if (host.starting || host.sessionSwitching || host.agent?.running) throw new Error('진행 중인 작업을 먼저 중지하세요.');
-    this.invalidate(); this.prunePages();
+    this.invalidate();
     host.saveSession();
     host.sessionId = crypto.randomUUID();
     host.events = [];
@@ -70,24 +61,24 @@ class ConversationController {
     const host = this.host;
     const vscode = this.vscode;
     if (host.starting || host.sessionSwitching || host.agent?.running) return;
-    this.invalidate(); this.prunePages(); host.sessionSwitching = true; host.stopRequested = false;
+    this.invalidate(); host.sessionSwitching = true; host.stopRequested = false;
     host.post({ type: 'busy' });
     try {
       const selected = await vscode.window.showQuickPick(host.sessions.filter(session => session.events.length).map(session => ({ label: session.title, description: new Date(session.updated).toLocaleString(), session })), { placeHolder: '이어서 작업할 대화' });
       if (!selected || host.stopRequested) return;
       if (selected.session.webUrl) await this.openWeb(selected.session.webUrl);
+      if (host.stopRequested) return;
       host.saveSession();
       host.sessionId = selected.session.id;
       host.events = selected.session.events;
       host.webUrl = selected.session.webUrl;
       host.newWebChat = !host.webUrl;
-      this.linkPage(); host.saveSession();
+      host.saveSession();
     } finally { host.sessionSwitching = false; host.view?.webview.postMessage(host.state()); host.post({ type: 'idle' }); }
   }
   async syncWeb(manual = true) {
     const host = this.host;
     if (host.starting || host.sessionSwitching || host.agent?.running || host.syncing) return;
-    this.prunePages();
     if (host.newWebChat) { if (manual) host.post({ type: 'status', text: '이 대화는 첫 요청을 보내면 새 웹 대화와 연결됩니다.' }); return; }
     if (!host.browser?.page || host.browser.page.isClosed() || !host.browser.readConversation) { if (manual) throw new Error('먼저 Copilot을 연결하고 웹 대화를 여세요.'); return; }
     host.syncing = true;
@@ -100,7 +91,6 @@ class ConversationController {
       if (host.webUrl && !snapshot.restorable) { if (manual) host.post({ type: 'status', text: '웹 대화 주소가 아직 정해지지 않았습니다. 웹에서 대화를 시작한 뒤 동기화하세요.' }); return; }
       const previousUrl = host.webUrl;
       if (snapshot.restorable && host.webUrl !== snapshot.url) {
-        host.webPages.delete(host.sessionId);
         const session = host.sessions.find(session => session.webUrl === snapshot.url);
         if (session) { host.sessionId = session.id; host.events = session.events; }
         else if (host.webUrl) { host.saveSession(); host.sessionId = crypto.randomUUID(); host.events = []; }
@@ -110,7 +100,6 @@ class ConversationController {
       const changed = JSON.stringify(merged) !== JSON.stringify(host.events);
       host.events = merged;
       if (changed || previousUrl !== host.webUrl) host.saveSession();
-      this.linkPage();
       if (changed || previousUrl !== host.webUrl || manual) host.view?.webview.postMessage(host.state());
       if (manual) host.post({ type: 'status', text: snapshot.messages.length ? `웹 대화 동기화 · ${snapshot.messages.length}개 메시지 확인` : '웹 대화 메시지 영역을 읽지 못했습니다. 현재 로컬 기록은 유지했습니다.' });
     } finally { host.syncing = false; }

@@ -240,7 +240,7 @@ test('additional credential and state file names are excluded', async t => {
 
 test('execution settings always require review', () => {
   const { requiresReview } = require('../src/policy');
-  for (const file of ['package.json', 'sub/package-lock.json', '.vscode/tasks.json', '.github/workflows/ci.yml', 'Makefile', 'scripts/test.ps1', 'setup.py', 'Dockerfile', 'build.gradle', 'x.csproj', 'jest.config.js', 'vite.config.ts', 'playwright.config.ts', 'nested/webpack.config.cjs', 'test/conftest.py', 'pytest.ini', 'tox.ini', 'noxfile.py', 'gradlew', 'mvnw', '.cargo/config.toml', 'sub/.cargo/credentials', 'settings.gradle.kts']) assert.equal(requiresReview(file), true, file);
+  for (const file of ['package.json', 'sub/package-lock.json', '.vscode/tasks.json', '.github/workflows/ci.yml', 'Makefile', 'scripts/test.ps1', 'setup.py', 'Dockerfile', 'build.gradle', 'x.csproj', 'jest.config.js', 'vite.config.ts', 'playwright.config.ts', 'nested/webpack.config.cjs', 'test/conftest.py', 'pytest.ini', 'tox.ini', 'noxfile.py', 'gradlew', 'mvnw', '.cargo/config.toml', 'sub/.cargo/credentials', 'settings.gradle.kts', '.mocharc.js', '.eslintrc.js', 'nested/.babelrc.cjs', 'jest.setup.ts', 'setup.jest.js', 'test/setup.js', 'tests/setupTests.ts', 'test/globalSetup.ts', '.pre-commit-config.yaml', '.pre-commit-config.yml']) assert.equal(requiresReview(file), true, file);
   assert.equal(requiresReview('src/average.js'), false);
   assert.equal(requiresReview('README.md'), false);
 });

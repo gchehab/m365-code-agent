@@ -14,6 +14,7 @@ el('includeEditor').checked = saved.includeEditor !== false;
 function persist() { api.setState({ draft: el('task').value, pendingTask, review: el('review').checked, includeEditor: el('includeEditor').checked }); }
 function busy(value) {
   running = value;
+  if (!value) progress(null);
   for (const id of ['run', 'connect', 'newChat', 'history', 'attach', 'model', 'refreshModels', 'syncWeb', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
   el('stop').hidden = !value;
   el('run').hidden = value;
@@ -85,6 +86,10 @@ function models(choices, selected) {
   for (const choice of choices || []) el('model').append(new Option(choice.label, choice.id));
   el('model').value = selected || '';
 }
+function progress(value) {
+  el('roundProgress').hidden = !value;
+  el('roundProgress').textContent = value ? `Copilot 요청 ${value.round}/${value.total} · 이후 ${value.remaining}회` : '';
+}
 window.addEventListener('message', ({ data }) => {
   if (data.type === 'message' || data.type === 'tool') message(data);
   if (data.type === 'status') { el('status').textContent = data.text; el('status').classList.toggle('error', Boolean(data.error)); }
@@ -95,6 +100,7 @@ window.addEventListener('message', ({ data }) => {
     pendingTask = null; persist();
   }
   if (data.type === 'models') models(data.choices, data.selected);
+  if (data.type === 'progress') progress(data);
   if (data.type === 'webConversation') { el('webSync').textContent = data.url ? '웹 기록 연결됨' : 'M365 Copilot'; el('webSync').title = data.url ? '5초마다 현재 웹 대화 동기화 · ' + data.url : '연결된 웹 대화를 5초마다 확인합니다.'; }
   if (data.type === 'history') {
     el('messages').replaceChildren(); tools.clear(); el('welcome').hidden = Boolean(data.events.length);
@@ -103,6 +109,7 @@ window.addEventListener('message', ({ data }) => {
     if (data.pending) window.dispatchEvent(new MessageEvent('message', { data: data.pending }));
     if (data.workspace) window.dispatchEvent(new MessageEvent('message', { data: { type: 'workspace', ...data.workspace } }));
     models(data.models, data.selectedModel);
+    progress(data.running ? data.progress : null);
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'webConversation', url: data.webUrl } }));
     if (!data.running && pendingTask) { if (!el('task').value.trim()) el('task').value = pendingTask.task; pendingTask = null; persist(); }
   }

@@ -3,7 +3,7 @@ const { buildPrompt, newId, normalizeToolCall, toolCallLimit } = require('./prot
 const { inspectProject } = require('./project');
 
 class CodingAgent {
-  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', maxRounds = 12, maxPromptCharacters = 12000 }) {
+  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', maxRounds = 20, maxPromptCharacters = 12000 }) {
     Object.assign(this, { store, transport, approveAndApply, runCommand, emit, conversation, mode, maxRounds, maxPromptCharacters });
     this.cancelled = false;
     this.running = false;
@@ -27,7 +27,8 @@ class CodingAgent {
       for (let round = 1; round <= this.maxRounds; round++) {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         const id = newId();
-        this.emit({ type: 'status', text: `진행 ${round}/${this.maxRounds} · Copilot 요청 준비` });
+        this.emit({ type: 'progress', round, total: this.maxRounds, remaining: this.maxRounds - round });
+        this.emit({ type: 'status', text: `진행 ${round}/${this.maxRounds} · 이후 ${this.maxRounds - round}회 · Copilot 요청 준비` });
         let reply;
         for (let attempt = 0; attempt < 3; attempt++) {
           const prompt = buildPrompt({ id, task, workspace: require('node:path').basename(this.store.root), files,
