@@ -37,6 +37,28 @@ async function run() {
   assert.equal(round, 3);
   assert.equal(vscode.workspace.textDocuments.find(doc => doc.uri.fsPath === path.join(root, 'src', 'average.js')).isDirty, false);
 
+  // Commands cannot run until the exact pending approval is accepted.
+  const commandJob = provider.runCommand('node test/average.test.js', root);
+  assert.equal(provider.runner.child, undefined);
+  await provider.handle({ type: 'approveCommand', token: 'stale-token' });
+  assert.equal(provider.runner.child, undefined);
+  await provider.handle({ type: 'approveCommand', token: provider.pending.viewData.token });
+  assert.equal((await commandJob).exitCode, 0);
+  const rejectedJob = provider.runCommand('echo should-not-run', root);
+  await provider.handle({ type: 'rejectCommand', token: provider.pending.viewData.token });
+  assert.equal((await rejectedJob).approved, false);
+
+  // Undo restores existing files and removes only files created by the agent.
+  await provider.undo();
+  assert.equal(await fs.readFile(path.join(root, 'src', 'average.js'), 'utf8'), original);
+  await assert.rejects(fs.access(path.join(root, 'test', 'average.test.js')));
+  assert.ok(provider.context.workspaceState.get('sessions').some(session => session.events.some(event => event.role === 'user')));
+  provider.browser.request = async prompt => {
+    assert.match(prompt, /빈 배열의 평균/);
+    return { kind: 'done', message: '이전 문맥 확인' };
+  };
+  await provider.start({ task: '앞의 작업을 설명해줘.', mode: 'ask', includeEditor: false });
+
   // Unsaved edits must never be overwritten by a model proposal.
   const document = await vscode.workspace.openTextDocument(path.join(root, 'src', 'average.js'));
   const edit = new vscode.WorkspaceEdit();
@@ -57,7 +79,7 @@ async function run() {
     await page.locator('#userInput').fill('확장 호스트에서 Edge 자동 입력');
     assert.equal(await page.locator('#userInput').inputValue(), '확장 호스트에서 Edge 자동 입력');
   } finally { await browser.close(); }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'dirty-file protection', 'Edge launch/input inside VS Code extension host'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

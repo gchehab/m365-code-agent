@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -38,7 +38,7 @@
         "m365Agent.responseTimeoutSeconds": { "type": "number", "default": 240, "minimum": 30, "maximum": 900 },
         "m365Agent.maxPromptCharacters": { "type": "number", "default": 48000, "minimum": 8000, "maximum": 120000 },
         "m365Agent.composerSelector": { "type": "string", "default": "", "description": "자동 감지가 실패할 때 지정할 Copilot 입력창 CSS 선택자" },
-        "m365Agent.sendButtonSelector": { "type": "string", "default": "", "description": "선택 사항: 전송 버튼 CSS 선택자. 비어 있으면 Enter로 전송합니다." },
+        "m365Agent.sendButtonSelector": { "type": "string", "default": "", "description": "선택 사항: 전송 버튼 CSS 선택자. 비어 있으면 버튼을 자동 감지하고 제출 여부를 확인합니다." },
         "m365Agent.responseSelector": { "type": "string", "default": "", "description": "선택 사항: Copilot 응답 컨테이너 CSS 선택자" }
       }
     }
@@ -46,8 +46,8 @@
   "scripts": {
     "prepackage": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\"",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/extension.js && node --check src/browser.js && node --check src/workspace.js && node --check src/protocol.js",
-    "package": "vsce package --out dist/m365-code-agent-0.1.0.vsix"
+    "check": "node --check src/extension.js && node --check src/agent.js && node --check src/browser.js && node --check src/workspace.js && node --check src/protocol.js && node --check src/terminal.js && node --check media/view.js",
+    "package": "node scripts/package.cjs"
   },
   "dependencies": { "ignore": "7.0.14", "playwright-core": "1.65.1" },
   "devDependencies": { "@vscode/vsce": "4.1.1" }

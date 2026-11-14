@@ -106,3 +106,47 @@ test('cancelled requests never apply changes', async t => {
   await assert.rejects(agent.run('cancel'), /중지/);
   assert.equal(applied, false);
 });
+
+test('Ask and Plan enforce read-only behavior and include previous conversation', async t => {
+  for (const mode of ['ask', 'plan']) {
+    const { store } = await fixture(t);
+    let applied = false, executed = false, round = 0;
+    const agent = new CodingAgent({ store, mode, conversation: [{ role: 'user', text: '이전 요청의 문맥' }], emit: () => {},
+      approveAndApply: async () => { applied = true; }, runCommand: async () => { executed = true; },
+      transport: { async request(prompt, id) {
+        assert.match(prompt, /이전 요청의 문맥/);
+        if (++round === 1) return { kind: 'tools', calls: [{ name: 'run_command', command: 'echo forbidden' }] };
+        if (round === 2) return { kind: 'changes', files: [{ path: 'new.txt', action: 'create', baseHash: null, content: 'bad' }] };
+        return { kind: 'done', message: '읽기 전용 완료' };
+      } }
+    });
+    await agent.run('조사해줘');
+    assert.equal(applied, false); assert.equal(executed, false);
+  }
+});
+
+test('command output and exit code return to the agent as tool observations', async t => {
+  const { store } = await fixture(t);
+  let round = 0;
+  const events = [];
+  const agent = new CodingAgent({ store, emit: event => events.push(event), runCommand: async () => ({ exitCode: 1, output: 'failed assertion' }),
+    transport: { async request(prompt) {
+      if (++round === 1) return { kind: 'tools', calls: [{ name: 'run_command', command: 'npm test' }] };
+      assert.match(prompt, /failed assertion/); assert.match(prompt, /"exitCode":1/);
+      return { kind: 'done', message: '테스트 실패 확인' };
+    } }
+  });
+  await agent.run('테스트해줘');
+  assert.equal(events.filter(event => event.type === 'tool').length, 2);
+});
+
+test('command runner captures failures, bounds output and terminates timed-out jobs', async t => {
+  const { root } = await fixture(t);
+  const { CommandRunner } = require('../src/terminal');
+  const runner = new CommandRunner();
+  const node = '"' + process.execPath + '"';
+  const result = await runner.run(`${node} -e "console.log('x'.repeat(15000));process.exit(3)"`, root);
+  assert.equal(result.exitCode, 3); assert.equal(result.truncated, true); assert.ok(result.output.length <= 12000);
+  const timed = await runner.run(`${node} -e "setInterval(()=>{},1000)"`, root, () => {}, 200);
+  assert.equal(timed.timedOut, true);
+});

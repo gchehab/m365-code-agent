@@ -16,7 +16,7 @@ function submit(){ const input=document.querySelector('textarea');const prompt=i
  const echo=document.createElement('pre');echo.textContent=prompt;document.querySelector('#responses').append(echo);
  setTimeout(()=>{const code=document.createElement('pre');code.textContent=JSON.stringify({requestId:id,kind:'done',message:'로컬 시뮬레이터 응답'});document.querySelector('#responses').append(code);},100);
 }
-document.querySelector('textarea').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}});
+// Regression fixture: Enter only inserts a newline, as on affected tenant UIs.
 document.querySelector('#send').onclick=submit;
 </script></body></html>` }));
   const page = await context.newPage();
@@ -32,6 +32,7 @@ test('automatic Edge DOM input and response extraction, without clipboard or ext
   const reply = await transport.request('Current requestId: fixture-123\nUse the structured protocol.', 'fixture-123');
   assert.equal(reply.kind, 'done');
   assert.equal(reply.message, '로컬 시뮬레이터 응답');
+  assert.equal(transport.lastSend.stage, 'confirmed');
 });
 
 test('configured send button works and user draft is not overwritten', async t => {
@@ -47,4 +48,45 @@ test('browser cancellation does not return a model response', async t => {
   const transport = await browserFixture(t);
   await assert.rejects(transport.request('Current requestId: cancel', 'cancel', () => { transport.cancelled = true; }), /중지/);
   assert.equal(await transport.page.locator('textarea').inputValue(), '');
+});
+
+test('a click without acknowledgement fails early and is never retried', async t => {
+  const transport = await browserFixture(t, { sendAckTimeoutMs: 600 });
+  await transport.page.evaluate(() => { window.clicks = 0; document.querySelector('#send').onclick = () => { window.clicks++; }; });
+  await assert.rejects(transport.request('Current requestId: no-ack', 'no-ack'), /제출을 확인하지/);
+  assert.equal(await transport.page.evaluate(() => window.clicks), 1);
+  assert.equal(transport.lastSend.stage, 'unconfirmed');
+});
+
+test('disabled send button is awaited, and English accessible names are detected', async t => {
+  const transport = await browserFixture(t);
+  await transport.page.evaluate(() => {
+    const button = document.querySelector('#send'); button.textContent = 'Send message'; button.disabled = true;
+    document.querySelector('textarea').addEventListener('input', () => setTimeout(() => { button.disabled = false; }, 300));
+  });
+  assert.equal((await transport.request('Current requestId: delayed', 'delayed')).kind, 'done');
+});
+
+test('unavailable send button clears only the owned unsent draft', async t => {
+  const transport = await browserFixture(t, { sendReadyTimeoutMs: 300 });
+  await transport.page.locator('#send').evaluate(button => { button.disabled = true; });
+  await assert.rejects(transport.request('Current requestId: disabled', 'disabled'), /활성화/);
+  assert.equal(await transport.page.locator('textarea').inputValue(), '');
+});
+
+test('rich-text composer in a child frame sends without relying on Enter', async t => {
+  const transport = await browserFixture(t);
+  await transport.page.setContent('<iframe title="chat"></iframe>');
+  const frame = transport.page.frames()[1];
+  await frame.setContent('<div id="m365-chat-editor-target-element" contenteditable="true" role="textbox"></div><button aria-label="Submit prompt">↑</button><pre></pre>');
+  await frame.evaluate(() => {
+    document.querySelector('button').onclick = () => {
+      const input = document.querySelector('[contenteditable]');
+      const id = input.innerText.match(/Current requestId: ([^\s]+)/)[1];
+      input.innerText = '';
+      document.querySelector('pre').textContent = JSON.stringify({ requestId: id, kind: 'done', message: 'rich text okay' });
+    };
+  });
+  const reply = await transport.request('Current requestId: rich\n다중 행 요청', 'rich');
+  assert.equal(reply.message, 'rich text okay');
 });

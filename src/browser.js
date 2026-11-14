@@ -24,6 +24,15 @@ class CopilotBrowser {
     this.cancelled = false;
   }
   async connect() {
+    if (!this.connecting) this.connecting = this.openConnection().finally(() => { this.connecting = null; });
+    return this.connecting;
+  }
+  async openConnection() {
+    if (this.context) {
+      const pages = this.context.pages().filter(page => !page.isClosed());
+      const copilot = pages.filter(page => { try { validateCopilotUrl(page.url()); return true; } catch { return false; } });
+      if (copilot.length) this.page = copilot.at(-1);
+    }
     if (this.context && this.page && !this.page.isClosed()) {
       if (this.page.url() === 'about:blank' || this.page.url().startsWith('chrome-error:')) {
         await this.page.goto(validateCopilotUrl(this.options.url), { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -57,11 +66,69 @@ class CopilotBrowser {
     }
     throw new Error('Copilot 입력창을 찾지 못했습니다. 전용 Edge 창에서 로그인하고 대화 화면을 연 뒤 다시 연결하세요. 화면 구조가 달라졌다면 입력창 CSS 선택자를 설정하세요.');
   }
+  async waitForComposer() {
+    const deadline = Date.now() + 10000;
+    while (true) {
+      if (this.cancelled) throw new Error('작업을 중지했습니다.');
+      try { return await this.getComposer(); }
+      catch (error) {
+        if (Date.now() >= deadline || this.page.isClosed()) throw error;
+        await this.page.waitForTimeout(250);
+      }
+    }
+  }
   async diagnostics() {
     await this.connect();
     let composer;
     try { composer = (await this.getComposer()).selector; } catch (error) { composer = error.message; }
-    return { url: this.page.url().split('?')[0], title: await this.page.title(), composer, frames: this.page.frames().length };
+    return { url: this.page.url().split('?')[0], title: await this.page.title(), composer, frames: this.page.frames().length, lastSend: this.lastSend || null };
+  }
+  async findSendButton(frame, composer) {
+    const groups = this.options.sendButtonSelector ? [frame.locator(this.options.sendButtonSelector)] : [
+      frame.getByRole('button', { name: /^(send|send message|send prompt|submit|submit prompt|보내기|전송|제출|메시지 보내기|메시지 전송|질문 보내기|프롬프트 제출|프롬프트 보내기)(\s*\(.*\))?$/i }),
+      frame.locator('button[data-testid="send-button"], button[data-testid="sendButton"], button[data-testid="send-message-button"], button[data-testid="submit-button"], button#submit-button, button#sendMessageButton, button:has([data-icon-name="Send"])'),
+      composer.locator('xpath=ancestor::form[1]').locator('button[type="submit"]')
+    ];
+    for (const group of groups) for (const button of (await group.all()).slice(0, 12)) {
+      if (await button.isVisible() && await button.isEnabled()) return button;
+    }
+    return null;
+  }
+  async submitPrompt(locator, frame, prompt, baseline, id) {
+    const readDraft = () => locator.evaluate(element => ('value' in element ? element.value : element.innerText) || '');
+    if ((await readDraft()).replace(/\r\n/g, '\n') !== prompt.replace(/\r\n/g, '\n')) throw new Error('Copilot 입력창에 요청 전체가 입력되지 않았습니다. 입력 길이 제한을 확인하세요.');
+    let button;
+    const readyDeadline = Date.now() + (this.options.sendReadyTimeoutMs || 8000);
+    while (Date.now() < readyDeadline) {
+      if (this.cancelled) throw new Error('작업을 중지했습니다.');
+      button = await this.findSendButton(frame, locator);
+      if (button) break;
+      await this.page.waitForTimeout(200);
+    }
+    if (!button) {
+      this.lastSend = { stage: 'button-not-ready', characters: prompt.length };
+      throw new Error('전송 버튼을 찾지 못했거나 활성화되지 않았습니다. Copilot 로그인·입력 길이 제한을 확인하세요. 요청은 전송하지 않았습니다.');
+    }
+    this.lastSend = { stage: 'clicked', characters: prompt.length };
+    await button.click({ timeout: 5000 });
+    const deadline = Date.now() + (this.options.sendAckTimeoutMs || 12000);
+    while (Date.now() < deadline) {
+      if (this.cancelled) throw new Error('작업을 중지했습니다.');
+      const cleared = await readDraft().then(text => !text.trim()).catch(() => false);
+      const generating = await this.generationActive();
+      let reply = false;
+      for (const text of await this.responseCandidates()) {
+        if (baseline.has(text)) continue;
+        try { parseReply(text, id); reply = true; break; } catch { /* Not a complete response yet. */ }
+      }
+      if (cleared || generating || reply) {
+        this.lastSend.stage = 'confirmed';
+        return;
+      }
+      await this.page.waitForTimeout(200);
+    }
+    this.lastSend.stage = 'unconfirmed';
+    throw new Error('전송 버튼을 눌렀지만 제출을 확인하지 못했습니다. Edge 창의 제한·오류 메시지를 확인하세요. 중복 전송을 피하려고 자동 재전송하지 않았습니다.');
   }
   async responseCandidates() {
     const texts = [];
@@ -95,11 +162,12 @@ class CopilotBrowser {
     if (this.busy) throw new Error('이미 Copilot 응답을 기다리는 중입니다.');
     this.busy = true;
     this.cancelled = false;
+    this.lastSend = null;
     let submitted = false;
     try {
       await this.connect();
       validateCopilotUrl(this.page.url());
-      const { locator, frame } = await this.getComposer();
+      const { locator, frame } = await this.waitForComposer();
       const draft = await locator.evaluate(element => ('value' in element ? element.value : element.innerText) || '');
       if (draft.trim()) throw new Error('Copilot 입력창에 작성 중인 내용이 있습니다. 덮어쓰지 않았습니다. 전용 창에서 내용을 정리한 뒤 다시 실행하세요.');
       if (await this.generationActive()) throw new Error('Copilot이 다른 응답을 생성 중입니다. 완료 후 다시 실행하세요.');
@@ -107,12 +175,9 @@ class CopilotBrowser {
       onStatus('Copilot에 요청을 보내고 있습니다…');
       await locator.fill(prompt);
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      if (this.options.sendButtonSelector) {
-        await frame.locator(this.options.sendButtonSelector).click();
-      } else {
-        await locator.press('Enter');
-      }
+      await this.submitPrompt(locator, frame, prompt, baseline, id);
       submitted = true;
+      onStatus('전송 확인됨 · Copilot 응답을 기다리고 있습니다…');
       const deadline = Date.now() + (this.options.timeoutSeconds || 240) * 1000;
       let candidateText = '', stableSince = 0, reported = false;
       while (Date.now() < deadline) {
@@ -134,7 +199,7 @@ class CopilotBrowser {
       }
       throw new Error('시간 안에 올바른 응답을 받지 못했습니다. 전용 창에서 로그인·사용량 제한·응답 형식을 확인하세요. 요청은 자동 재전송하지 않았습니다.');
     } finally {
-      if (this.cancelled && !submitted && this.page && !this.page.isClosed()) {
+      if ((this.cancelled || this.lastSend?.stage === 'button-not-ready') && !submitted && this.page && !this.page.isClosed()) {
         try {
           const { locator } = await this.getComposer();
           const draft = await locator.evaluate(element => ('value' in element ? element.value : element.innerText) || '');
