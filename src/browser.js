@@ -1,5 +1,6 @@
 'use strict';
 const { parseReply } = require('./protocol');
+const { normalizeDraft, matchesPrompt, readComposer, promptLimitError, isAgentProtocolDraft } = require('./composer');
 
 const allowedHosts = new Set(['m365.cloud.microsoft', 'copilot.cloud.microsoft', 'www.microsoft365.com', 'microsoft365.com', 'www.office.com', 'office.com']);
 function validateCopilotUrl(value) {
@@ -95,8 +96,6 @@ class CopilotBrowser {
     return null;
   }
   async submitPrompt(locator, frame, prompt, baseline, id) {
-    const readDraft = () => locator.evaluate(element => ('value' in element ? element.value : element.innerText) || '');
-    if ((await readDraft()).replace(/\r\n/g, '\n') !== prompt.replace(/\r\n/g, '\n')) throw new Error('Copilot 입력창에 요청 전체가 입력되지 않았습니다. 입력 길이 제한을 확인하세요.');
     let button;
     const readyDeadline = Date.now() + (this.options.sendReadyTimeoutMs || 8000);
     while (Date.now() < readyDeadline) {
@@ -106,15 +105,17 @@ class CopilotBrowser {
       await this.page.waitForTimeout(200);
     }
     if (!button) {
-      this.lastSend = { stage: 'button-not-ready', characters: prompt.length };
+      await this.verifyInput(locator, prompt);
+      this.lastSend.stage = 'button-not-ready';
       throw new Error('전송 버튼을 찾지 못했거나 활성화되지 않았습니다. Copilot 로그인·입력 길이 제한을 확인하세요. 요청은 전송하지 않았습니다.');
     }
-    this.lastSend = { stage: 'clicked', characters: prompt.length };
+    await this.verifyInput(locator, prompt);
+    this.lastSend.stage = 'clicked';
     await button.click({ timeout: 5000 });
     const deadline = Date.now() + (this.options.sendAckTimeoutMs || 12000);
     while (Date.now() < deadline) {
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      const cleared = await readDraft().then(text => !text.trim()).catch(() => false);
+      const cleared = await readComposer(locator).then(snapshot => !snapshot.text.trim()).catch(() => false);
       const generating = await this.generationActive();
       let reply = false;
       for (const text of await this.responseCandidates()) {
@@ -129,6 +130,38 @@ class CopilotBrowser {
     }
     this.lastSend.stage = 'unconfirmed';
     throw new Error('전송 버튼을 눌렀지만 제출을 확인하지 못했습니다. Edge 창의 제한·오류 메시지를 확인하세요. 중복 전송을 피하려고 자동 재전송하지 않았습니다.');
+  }
+  async verifyInput(locator, prompt) {
+    let snapshot;
+    const deadline = Date.now() + (this.options.inputSettleTimeoutMs || 1500);
+    do {
+      snapshot = await readComposer(locator);
+      this.lastSend = { stage: 'input-check', characters: prompt.length, observedCharacters: snapshot.text.length, maxLength: snapshot.maxLength, tag: snapshot.tag };
+      if (matchesPrompt(snapshot, prompt)) { this.ownedDraft = snapshot; return; }
+      if (this.cancelled) throw new Error('작업을 중지했습니다.');
+      await this.page.waitForTimeout(100);
+    } while (Date.now() < deadline);
+    const actual = normalizeDraft(snapshot.text), expected = normalizeDraft(prompt);
+    if (actual.length >= 32 && actual.length < expected.length && expected.startsWith(actual)) {
+      this.ownedDraft = snapshot;
+      this.promptCharacterLimit = snapshot.maxLength ?? actual.length;
+      this.lastSend.stage = 'input-truncated';
+      throw promptLimitError(this.promptCharacterLimit, prompt.length);
+    }
+    this.lastSend.stage = 'input-mismatch';
+    throw new Error(`Copilot 편집기가 입력 내용을 변경했습니다 (요청 ${prompt.length.toLocaleString()}자 / 확인 ${snapshot.text.length.toLocaleString()}자). 길이 제한으로 단정하지 않았으며 전송하지 않았습니다. ⋯ 연결 진단에서 입력 상태를 확인하세요.`);
+  }
+  async writePrompt(locator, prompt) {
+    const initial = await readComposer(locator);
+    if (initial.maxLength !== null && prompt.length > initial.maxLength) {
+      this.promptCharacterLimit = initial.maxLength;
+      this.lastSend = { stage: 'input-limit', characters: prompt.length, observedCharacters: 0, maxLength: initial.maxLength, tag: initial.tag };
+      throw promptLimitError(initial.maxLength, prompt.length);
+    }
+    await locator.fill(prompt);
+    const snapshot = await readComposer(locator);
+    if (matchesPrompt(snapshot, prompt)) this.ownedDraft = snapshot;
+    await this.verifyInput(locator, prompt);
   }
   async responseCandidates() {
     const texts = [];
@@ -163,17 +196,23 @@ class CopilotBrowser {
     this.busy = true;
     this.cancelled = false;
     this.lastSend = null;
+    this.ownedDraft = null;
     let submitted = false;
     try {
       await this.connect();
       validateCopilotUrl(this.page.url());
       const { locator, frame } = await this.waitForComposer();
-      const draft = await locator.evaluate(element => ('value' in element ? element.value : element.innerText) || '');
-      if (draft.trim()) throw new Error('Copilot 입력창에 작성 중인 내용이 있습니다. 덮어쓰지 않았습니다. 전용 창에서 내용을 정리한 뒤 다시 실행하세요.');
+      const draft = (await readComposer(locator)).text;
       if (await this.generationActive()) throw new Error('Copilot이 다른 응답을 생성 중입니다. 완료 후 다시 실행하세요.');
+      if (draft.trim()) {
+        if (!isAgentProtocolDraft(draft) || (await readComposer(locator)).text !== draft) throw new Error('Copilot 입력창에 작성 중인 내용이 있습니다. 덮어쓰지 않았습니다. 전용 창에서 내용을 정리한 뒤 다시 실행하세요.');
+        await locator.fill('');
+        onStatus('이전 버전이 남긴 자동화 요청 초안을 정리했습니다. 새 요청을 준비합니다.');
+      }
+      if (this.cancelled) throw new Error('작업을 중지했습니다.');
       const baseline = new Set(await this.responseCandidates());
       onStatus('Copilot에 요청을 보내고 있습니다…');
-      await locator.fill(prompt);
+      await this.writePrompt(locator, prompt);
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
       await this.submitPrompt(locator, frame, prompt, baseline, id);
       submitted = true;
@@ -199,11 +238,11 @@ class CopilotBrowser {
       }
       throw new Error('시간 안에 올바른 응답을 받지 못했습니다. 전용 창에서 로그인·사용량 제한·응답 형식을 확인하세요. 요청은 자동 재전송하지 않았습니다.');
     } finally {
-      if ((this.cancelled || this.lastSend?.stage === 'button-not-ready') && !submitted && this.page && !this.page.isClosed()) {
+      if (!submitted && !['clicked', 'unconfirmed'].includes(this.lastSend?.stage) && this.ownedDraft && this.page && !this.page.isClosed()) {
         try {
           const { locator } = await this.getComposer();
-          const draft = await locator.evaluate(element => ('value' in element ? element.value : element.innerText) || '');
-          if (draft === prompt) await locator.fill('');
+          const draft = await readComposer(locator);
+          if (draft.text === this.ownedDraft.text && draft.visibleText === this.ownedDraft.visibleText) await locator.fill('');
         } catch { /* Never clear a draft that is not exactly the one we inserted. */ }
       }
       this.busy = false;

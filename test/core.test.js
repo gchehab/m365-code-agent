@@ -150,3 +150,44 @@ test('command runner captures failures, bounds output and terminates timed-out j
   const timed = await runner.run(`${node} -e "setInterval(()=>{},1000)"`, root, () => {}, 200);
   assert.equal(timed.timedOut, true);
 });
+
+test('compact prompts use standard JSON fencing and retain code whitespace as escaped data', () => {
+  const source = 'def hello():\n    print("a  b")\n';
+  const prompt = buildPrompt({ id: 'compact', task: '설명해줘', workspace: 'sample', files: { files: [], truncated: false }, history: [], extraContext: JSON.stringify([{ path: 'a.py', content: source }]) });
+  assert.ok(prompt.length < 2500);
+  assert.equal(prompt.includes('\n'), false);
+  assert.equal(prompt.includes('m365-agent'), false);
+  assert.match(prompt, /standard json/);
+  assert.equal(JSON.parse(prompt.split('DATA: ')[1]).context[0].content, source);
+});
+
+test('prompt budgeting preserves the task, marks omissions and never silently truncates file bodies', () => {
+  const task = '사용자 요청 전체를 유지해줘.';
+  const history = [{ kind: 'tool_results', observations: [{ call: { name: 'read_file', path: 'large.txt' }, result: { hash: 'abc', content: 'large'.repeat(4000) } }] }];
+  const prompt = buildPrompt({ id: 'budget', task, workspace: 'sample', files: { files: Array.from({ length: 250 }, (_, i) => `long/path/to/source-${i}.js`), truncated: false }, extraContext: JSON.stringify([{ path: 'attached.py', content: 'x'.repeat(10000) }]), history, maxCharacters: 4000 });
+  assert.ok(prompt.length <= 4000);
+  const data = JSON.parse(prompt.split('DATA: ')[1]);
+  assert.equal(data.task, task);
+  assert.equal(data.files.truncated, true);
+  assert.ok(data.context[0].omitted);
+  assert.ok(data.history[0].observations[0].error);
+  assert.equal(data.history[0].observations[0].result, undefined);
+  assert.equal(history[0].observations[0].result.hash, 'abc');
+});
+
+test('agent rebuilds a request only after a confirmed pre-submit length rejection', async t => {
+  const { store } = await fixture(t);
+  const { promptLimitError } = require('../src/composer');
+  let attempts = 0;
+  const agent = new CodingAgent({ store, emit: () => {}, transport: { async request(prompt) {
+    if (++attempts === 1) { assert.ok(prompt.length > 4000); throw promptLimitError(4000, prompt.length); }
+    assert.ok(prompt.length <= 4000);
+    return { kind: 'done', message: '자동 축소 후 완료' };
+  } } });
+  assert.equal((await agent.run('한도를 맞춰줘', JSON.stringify([{ path: 'big.txt', content: 'x'.repeat(6000) }]))).status, 'done');
+  assert.equal(attempts, 2);
+  attempts = 0;
+  agent.transport.request = async () => { attempts++; throw new Error('전송 확인 실패'); };
+  await assert.rejects(agent.run('중복 전송 금지'), /전송 확인/);
+  assert.equal(attempts, 1);
+});

@@ -2,7 +2,7 @@
 const { buildPrompt, newId } = require('./protocol');
 
 class CodingAgent {
-  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', maxRounds = 12, maxPromptCharacters = 48000 }) {
+  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', maxRounds = 12, maxPromptCharacters = 12000 }) {
     Object.assign(this, { store, transport, approveAndApply, runCommand, emit, conversation, mode, maxRounds, maxPromptCharacters });
     this.cancelled = false;
     this.running = false;
@@ -14,6 +14,7 @@ class CodingAgent {
     this.running = true;
     this.cancelled = false;
     const history = this.conversation.slice(-12).map(event => ({ role: event.role, text: event.text.slice(0, 4000) }));
+    let promptBudget = Math.min(this.maxPromptCharacters, this.transport.promptCharacterLimit ?? this.maxPromptCharacters);
     try {
       const files = await this.store.listFiles(250);
       this.emit({ type: 'message', role: 'user', text: task });
@@ -21,19 +22,19 @@ class CodingAgent {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         const id = newId();
         this.emit({ type: 'status', text: `진행 ${round}/${this.maxRounds} · Copilot 요청 준비` });
-        const recentHistory = history.slice(-8);
-        let prompt;
-        while (true) {
+        let reply;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const prompt = buildPrompt({ id, task, workspace: require('node:path').basename(this.store.root), files,
+            history, extraContext, mode: this.mode, maxCharacters: promptBudget });
           try {
-            prompt = buildPrompt({ id, task, workspace: require('node:path').basename(this.store.root), files,
-              history: recentHistory, extraContext, mode: this.mode, maxCharacters: this.maxPromptCharacters });
+            reply = await this.transport.request(prompt, id, text => this.emit({ type: 'status', text }));
             break;
           } catch (error) {
-            if (recentHistory.length <= 1) throw error;
-            recentHistory.shift();
+            if (this.cancelled || attempt === 2 || error.code !== 'PROMPT_LIMIT' || error.notSubmitted !== true || !Number.isFinite(error.maxCharacters) || error.maxCharacters < 2000 || error.maxCharacters >= prompt.length) throw error;
+            promptBudget = Math.min(promptBudget, error.maxCharacters);
+            this.emit({ type: 'status', text: `Copilot 입력 한도 ${promptBudget.toLocaleString()}자에 맞춰 문맥을 줄이고 있습니다. 아직 전송하지 않았습니다.` });
           }
         }
-        const reply = await this.transport.request(prompt, id, text => this.emit({ type: 'status', text }));
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         if (reply.kind === 'done') {
           this.emit({ type: 'message', role: 'assistant', text: reply.message });

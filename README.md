@@ -13,7 +13,7 @@ VS Code의 프로젝트를 읽고 수정하며, 로그인된 M365 Copilot 웹과
 
 ## 설치
 
-1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.2.0.vsix`를 선택합니다.
+1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.2.1.vsix`를 선택합니다.
 2. 프로젝트 폴더를 열고 왼쪽 활동 표시줄의 M365 Agent 아이콘을 선택합니다.
 3. 입력창 아래 `연결`을 누릅니다. PC에 설치된 Edge가 확장 전용 프로필로 열립니다.
 4. 이 전용 창에서 **회사 계정 로그인과 MFA를 직접** 완료하고 Copilot 대화 화면으로 이동합니다.
@@ -72,11 +72,15 @@ GitHub Copilot·Codex·Claude Code의 일반적인 작업 방식을 참고한 �
 - `m365Agent.responseSelector`: 응답 코드/메시지를 감싸는 CSS 선택자. 기본값은 코드 블록과 알려진 응답 컨테이너입니다.
 - `m365Agent.responseTimeoutSeconds`: 응답 대기 제한(기본 240초).
 - `m365Agent.maxRounds`: 읽기·수정 반복 제한(기본 12회).
+- `m365Agent.maxPromptCharacters`: 요청 길이 상한(기본 12,000자). 입력창의 실제 한도가 더 작다고 전송 전에 확인되면 오래된 대화·파일 목록·첨부 문맥을 줄여 재구성합니다. 큰 파일 본문을 넘기지 못하면 도구 오류로 모델에 알리고 좁은 검색을 요청합니다. 사용자 요청과 코드 내용을 중간에서 잘라 보내지 않습니다.
 - `m365Agent.browserChannel`: Edge(msedge) 또는 Chrome(chrome).
 
 설정을 변경한 뒤 VS Code의 `개발자: 창 다시 로드`로 전용 브라우저 연결을 다시 만드세요.
 Copilot 입력창에 직접 작성 중인 내용이 있으면 덮어쓰지 않고 작업을 중단합니다.
 응답은 요청별 ID가 일치하는 구조화된 JSON만 받습니다. 응답 형식 오류나 시간 초과 시 파일을 적용하거나 요청을 자동 재전송하지 않습니다.
+응답 코드 블록은 표준 `json`을 사용합니다. 과거 `m365-agent` 언어 이름으로 인한 구문 강조 경고를 피합니다.
+입력은 DOM의 문단과 실제 텍스트로 검증하고, 진단에는 요청·확인 글자 수와 표시된 한도를 포함합니다. 길이가 달라도 곧바로 길이 제한으로 단정하지 않습니다.
+0.2.0이 남긴 식별 가능한 자동화 요청 초안은 다음 작업 전에 정리합니다. 일반 사용자 초안은 자동 삭제하지 않습니다. 자동 전송이 중단됐을 때 브라우저의 전송 버튼을 직접 누르지 말고 오류를 확인하세요.
 
 ## 동작 방식과 제약
 

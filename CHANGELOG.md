@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- Replace the custom `m365-agent` response fence with standard `json`, retaining legacy response parsing.
+- Compact requests into one paragraph with JSON-escaped file contents; reduce the default prompt cap from 48,000 to 12,000 characters.
+- Verify rich-editor text using DOM text and paragraph structure, preserving code indentation while tolerating editor paragraph gaps and nonbreaking spaces.
+- Read native input limits before filling. Rebuild context only after a confirmed pre-submit size rejection; never retry a clicked/unconfirmed Send.
+- Distinguish actual truncation from other input changes, expose character counts in diagnostics, and clean only identifiable unsent automation drafts.
+- Recover recognizable protocol drafts left by older versions while preserving ordinary user drafts.
+
 ## 0.2.0
 
 - Fix requests left in the M365 composer: detect and click Send, wait for enabled state, and confirm submission before waiting for a response. Never blindly retry an unconfirmed submission.
