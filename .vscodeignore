@@ -2,8 +2,10 @@ test/**
 dist/**
 .vscode/**
 .test-output/**
+.vscode-test/**
 .gitignore
 .github/**
+eslint.config.cjs
 scripts/**
 node_modules/.cache/**
 package-lock.json

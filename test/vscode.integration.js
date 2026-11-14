@@ -39,6 +39,7 @@ async function run() {
 
   // Commands cannot run until the exact pending approval is accepted.
   const commandJob = provider.runCommand('node test/average.test.js', root);
+  assert.ok(provider.pending.viewData.changedFiles.some(file => file.path === 'src/average.js'));
   assert.equal(provider.runner.child, undefined);
   await provider.handle({ type: 'approveCommand', token: 'stale-token' });
   assert.equal(provider.runner.child, undefined);
@@ -58,6 +59,41 @@ async function run() {
     return { kind: 'done', message: '이전 문맥 확인' };
   };
   await provider.start({ task: '앞의 작업을 설명해줘.', mode: 'ask', includeEditor: false });
+
+  // Disabling normal review cannot bypass review of executable configuration.
+  const { WorkspaceStore } = require('../src/workspace');
+  const guardedStore = await new WorkspaceStore(root).initialize();
+  const guardedChanges = await guardedStore.prepareChanges([{ path: 'package.json', action: 'create', baseHash: null, content: '{"scripts":{"test":"echo altered"}}\n' }]);
+  let guardedJob = provider.stageAndApply(guardedStore, guardedChanges, '실행 설정 변경', false);
+  assert.deepEqual(provider.pending.viewData.forcedReview, ['package.json']);
+  await assert.rejects(fs.access(path.join(root, 'package.json')));
+  await provider.handle({ type: 'reject', token: provider.pending.viewData.token });
+  assert.equal(await guardedJob, false);
+  guardedJob = provider.stageAndApply(guardedStore, guardedChanges, '실행 설정 변경', false);
+  await provider.handle({ type: 'apply', token: provider.pending.viewData.token });
+  assert.equal(await guardedJob, true);
+  const inspectCommand = provider.runCommand('npm test', root);
+  assert.ok(provider.pending.viewData.changedFiles.some(file => file.path === 'package.json' && file.sensitive && file.id));
+  await provider.handle({ type: 'rejectCommand', token: provider.pending.viewData.token });
+  assert.equal((await inspectCommand).approved, false);
+  await provider.undo();
+  await assert.rejects(fs.access(path.join(root, 'package.json')));
+
+  // A large file is edited using a bounded read and an exact replacement anchor.
+  const large = Array.from({ length: 1000 }, (_, i) => `const row${i} = "${'x'.repeat(60)}";`).join('\n');
+  await fs.writeFile(path.join(root, 'src', 'large.js'), large);
+  let largeRound = 0;
+  provider.browser.request = async prompt => {
+    if (++largeRound === 1) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/large.js', startLine: 501, lineCount: 4 }] };
+    if (largeRound === 2) {
+      assert.match(prompt, /const row500/); assert.ok(prompt.length < 12000);
+      return { kind: 'changes', files: [{ path: 'src/large.js', action: 'edit', baseHash: digest(large), edits: [{ oldText: 'const row500 =', newText: 'const fixed500 =' }] }] };
+    }
+    return { kind: 'done', message: '큰 파일 부분 수정 완료' };
+  };
+  await provider.start({ task: 'row500만 고쳐줘.', mode: 'agent', includeEditor: false, review: false });
+  assert.equal(await fs.readFile(path.join(root, 'src', 'large.js'), 'utf8'), large.replace('const row500 =', 'const fixed500 ='));
+  assert.equal(largeRound, 3);
 
   // Unsaved edits must never be overwritten by a model proposal.
   const document = await vscode.workspace.openTextDocument(path.join(root, 'src', 'average.js'));
@@ -79,7 +115,7 @@ async function run() {
     await page.locator('#userInput').fill('확장 호스트에서 Edge 자동 입력');
     assert.equal(await page.locator('#userInput').inputValue(), '확장 호스트에서 Edge 자동 입력');
   } finally { await browser.close(); }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

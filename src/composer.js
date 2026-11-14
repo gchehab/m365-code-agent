@@ -1,4 +1,5 @@
 'use strict';
+/* global getComputedStyle */
 
 const normalizeDraft = text => text.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').replace(/\n+$/, '');
 const matchesPrompt = (snapshot, prompt) => [snapshot.text, snapshot.visibleText].some(text => normalizeDraft(text) === normalizeDraft(prompt));

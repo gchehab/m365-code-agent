@@ -2,53 +2,174 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
   "icon": "media/icon.png",
-  "repository": { "type": "git", "url": "https://github.com/jhoon-dev/m365-code-agent.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jhoon-dev/m365-code-agent.git"
+  },
   "homepage": "https://github.com/jhoon-dev/m365-code-agent#readme",
-  "bugs": { "url": "https://github.com/jhoon-dev/m365-code-agent/issues" },
-  "keywords": ["M365", "Copilot", "coding", "agent", "Edge", "Playwright"],
-  "galleryBanner": { "color": "#12243a", "theme": "dark" },
+  "bugs": {
+    "url": "https://github.com/jhoon-dev/m365-code-agent/issues"
+  },
+  "keywords": [
+    "M365",
+    "Copilot",
+    "coding",
+    "agent",
+    "Edge",
+    "Playwright"
+  ],
+  "galleryBanner": {
+    "color": "#12243a",
+    "theme": "dark"
+  },
   "license": "MIT",
-  "engines": { "vscode": "^1.95.0" },
-  "categories": ["Other"],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "./src/extension.js",
-  "extensionKind": ["ui"],
-  "capabilities": { "untrustedWorkspaces": { "supported": false }, "virtualWorkspaces": { "supported": false } },
-  "activationEvents": ["onView:m365Agent.chat"],
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "activationEvents": [
+    "onView:m365Agent.chat"
+  ],
   "contributes": {
     "commands": [
-      { "command": "m365Agent.open", "title": "M365 Agent: 열기" },
-      { "command": "m365Agent.connect", "title": "M365 Agent: Copilot 연결 / 로그인" },
-      { "command": "m365Agent.newChat", "title": "M365 Agent: 새 대화" },
-      { "command": "m365Agent.stop", "title": "M365 Agent: 작업 중지" },
-      { "command": "m365Agent.diagnostics", "title": "M365 Agent: 연결 진단" }
+      {
+        "command": "m365Agent.open",
+        "title": "M365 Agent: 열기"
+      },
+      {
+        "command": "m365Agent.connect",
+        "title": "M365 Agent: Copilot 연결 / 로그인"
+      },
+      {
+        "command": "m365Agent.newChat",
+        "title": "M365 Agent: 새 대화"
+      },
+      {
+        "command": "m365Agent.stop",
+        "title": "M365 Agent: 작업 중지"
+      },
+      {
+        "command": "m365Agent.diagnostics",
+        "title": "M365 Agent: 연결 진단"
+      }
     ],
-    "viewsContainers": { "activitybar": [{ "id": "m365Agent", "title": "M365 Agent", "icon": "media/agent.svg" }] },
-    "views": { "m365Agent": [{ "type": "webview", "id": "m365Agent.chat", "name": "Code Agent" }] },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "m365Agent",
+          "title": "M365 Agent",
+          "icon": "media/agent.svg"
+        }
+      ]
+    },
+    "views": {
+      "m365Agent": [
+        {
+          "type": "webview",
+          "id": "m365Agent.chat",
+          "name": "Code Agent"
+        }
+      ]
+    },
     "configuration": {
       "title": "M365 Code Agent",
       "properties": {
-        "m365Agent.copilotUrl": { "type": "string", "default": "https://m365.cloud.microsoft/chat", "description": "회사 M365 Copilot 또는 Code Assistant 에이전트의 웹 주소" },
-        "m365Agent.browserChannel": { "type": "string", "enum": ["msedge", "chrome"], "default": "msedge", "description": "PC에 설치된 브라우저. 별도 브라우저 확장은 필요하지 않습니다." },
-        "m365Agent.maxRounds": { "type": "number", "default": 12, "minimum": 1, "maximum": 30 },
-        "m365Agent.responseTimeoutSeconds": { "type": "number", "default": 240, "minimum": 30, "maximum": 900 },
-        "m365Agent.maxPromptCharacters": { "type": "number", "default": 12000, "minimum": 4000, "maximum": 120000, "description": "웹에 보낼 요청의 최대 글자 수. 입력창 한도가 더 작으면 전송 전에 문맥을 자동으로 줄입니다." },
-        "m365Agent.composerSelector": { "type": "string", "default": "", "description": "자동 감지가 실패할 때 지정할 Copilot 입력창 CSS 선택자" },
-        "m365Agent.sendButtonSelector": { "type": "string", "default": "", "description": "선택 사항: 전송 버튼 CSS 선택자. 비어 있으면 버튼을 자동 감지하고 제출 여부를 확인합니다." },
-        "m365Agent.responseSelector": { "type": "string", "default": "", "description": "선택 사항: Copilot 응답 컨테이너 CSS 선택자" }
+        "m365Agent.copilotUrl": {
+          "type": "string",
+          "default": "https://m365.cloud.microsoft/chat",
+          "description": "회사 M365 Copilot 또는 Code Assistant 에이전트의 웹 주소"
+        },
+        "m365Agent.browserChannel": {
+          "type": "string",
+          "enum": [
+            "msedge",
+            "chrome"
+          ],
+          "default": "msedge",
+          "description": "PC에 설치된 브라우저. 별도 브라우저 확장은 필요하지 않습니다."
+        },
+        "m365Agent.maxRounds": {
+          "type": "number",
+          "default": 12,
+          "minimum": 1,
+          "maximum": 30
+        },
+        "m365Agent.responseTimeoutSeconds": {
+          "type": "number",
+          "default": 240,
+          "minimum": 30,
+          "maximum": 900
+        },
+        "m365Agent.maxPromptCharacters": {
+          "type": "number",
+          "default": 12000,
+          "minimum": 4000,
+          "maximum": 120000,
+          "description": "웹에 보낼 요청의 최대 글자 수. 입력창 한도가 더 작으면 전송 전에 문맥을 자동으로 줄입니다."
+        },
+        "m365Agent.commandOutputEncoding": {
+          "type": "string",
+          "enum": [
+            "utf8",
+            "cp949"
+          ],
+          "default": "utf8",
+          "description": "명령 출력 인코딩과 Windows 코드페이지. CP949 전용 도구를 실행할 때 cp949로 설정하세요."
+        },
+        "m365Agent.composerSelector": {
+          "type": "string",
+          "default": "",
+          "description": "자동 감지가 실패할 때 지정할 Copilot 입력창 CSS 선택자"
+        },
+        "m365Agent.sendButtonSelector": {
+          "type": "string",
+          "default": "",
+          "description": "선택 사항: 전송 버튼 CSS 선택자. 비어 있으면 버튼을 자동 감지하고 제출 여부를 확인합니다."
+        },
+        "m365Agent.responseSelector": {
+          "type": "string",
+          "default": "",
+          "description": "선택 사항: Copilot 응답 컨테이너 CSS 선택자"
+        }
       }
     }
   },
   "scripts": {
     "prepackage": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\"",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/extension.js && node --check src/agent.js && node --check src/browser.js && node --check src/composer.js && node --check src/workspace.js && node --check src/protocol.js && node --check src/terminal.js && node --check media/view.js",
+    "test:integration": "node scripts/test-integration.cjs",
+    "lint": "eslint src media/*.js scripts/*.cjs eslint.config.cjs",
+    "check": "npm run lint && node --check src/extension.js && node --check src/agent.js && node --check src/browser.js && node --check src/composer.js && node --check src/workspace.js && node --check src/protocol.js && node --check src/terminal.js && node --check media/view.js",
     "package": "node scripts/package.cjs"
   },
-  "dependencies": { "ignore": "7.0.14", "playwright-core": "1.65.1" },
-  "devDependencies": { "@vscode/vsce": "4.1.1" }
+  "dependencies": {
+    "ignore": "7.0.14",
+    "playwright-core": "1.65.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "4.1.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0"
+  }
 }

@@ -52,10 +52,12 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await host({ type: 'tool', id: 'read-1', label: 'read_file · src/average.js', state: 'done' });
   assert.equal(await page.locator('.tool').count(), 1);
   await host({ type: 'message', role: 'assistant', text: '빈 배열에는 null을 반환하도록 수정합니다.\n```js\naverage([]) === null\n```' });
-  await host({ type: 'changes', summary: '빈 배열 처리 및 회귀 테스트', files: [{ id: 'preview-1', path: 'src/average.js', action: 'replace' }], review: true, token: 'review-123' });
+  await host({ type: 'changes', summary: '빈 배열 처리 및 회귀 테스트', files: [{ id: 'preview-1', path: 'src/average.js', action: 'replace' }], review: true, forcedReview: ['package.json'], token: 'review-123' });
+  assert.match(await page.locator('#reviewReason').textContent(), /자동 적용/);
   await page.locator('#apply').click();
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'apply'))).token, 'review-123');
-  await host({ type: 'commandApproval', command: 'npm test', root: 'C:\\workspace\\sample', token: 'cmd-123' });
+  await host({ type: 'commandApproval', command: 'npm test', root: 'C:\\workspace\\sample', changedFiles: [{ path: 'package.json', sensitive: true, id: 'preview-1' }], token: 'cmd-123' });
+  assert.match(await page.locator('#commandChanges').textContent(), /실행 설정 · package.json/);
   await page.locator('#approveCommand').click();
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'approveCommand'))).token, 'cmd-123');
   await host({ type: 'idle' });

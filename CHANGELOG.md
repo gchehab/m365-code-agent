@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.1
+## 0.3.0
+
+- Add bounded line-range reads and exact partial edits for files up to 128KB. Reject unseen, ambiguous, overlapping or stale edit anchors.
+- Always require review for execution configs, dependency manifests, build/CI files and shell scripts, even when normal edit review is disabled.
+- Show agent-modified files and native diffs alongside command approval.
+- Decode terminal output as streams; support UTF-8 and CP949 with matching Windows code pages.
+- Search directly on disk without opening files in the editor. Expand credential/state/config exclusions.
+- Extract webview rendering and review policy modules, fix indentation and enforce ESLint checks.
+- Run the VS Code extension-host integration test in CI and guard packages/source archives against tracked test profiles.
 
 - Replace the custom `m365-agent` response fence with standard `json`, retaining legacy response parsing.
 - Compact requests into one paragraph with JSON-escaped file contents; reduce the default prompt cap from 48,000 to 12,000 characters.

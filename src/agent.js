@@ -49,7 +49,8 @@ class CodingAgent {
             this.emit({ type: 'tool', id: toolId, label, state: 'running' });
             try {
               let result;
-              if (call.name === 'read_file') result = await this.store.readFile(call.path);
+              const resultBudget = Math.max(256, Math.min(6000, Math.floor((promptBudget - 2500) / reply.calls.length)));
+              if (call.name === 'read_file') result = await this.store.readFile(call.path, { startLine: call.startLine, lineCount: call.lineCount, maxCharacters: resultBudget });
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit);
               else if (call.name === 'search_text') result = await this.store.search(call.query, call.paths);
               else if (call.name === 'run_command') {
@@ -57,6 +58,9 @@ class CodingAgent {
                 result = await this.runCommand(call.command);
               }
               else throw new Error('지원하지 않는 도구입니다.');
+              if (Array.isArray(result.files)) while (JSON.stringify(result).length > resultBudget && result.files.length > 1) { result.files.pop(); result.truncated = true; }
+              if (Array.isArray(result.matches)) while (JSON.stringify(result).length > resultBudget && result.matches.length > 1) { result.matches.pop(); result.truncated = true; }
+              if (typeof result.output === 'string' && result.output.length > resultBudget) { result.output = result.output.slice(-resultBudget); result.truncated = true; }
               if (JSON.stringify(result).length > 22000) throw new Error('파일 또는 검색 결과가 너무 큽니다. 더 작은 파일이나 검색 범위를 요청하세요.');
               observations.push({ call, result });
               const failed = result.exitCode !== undefined && result.exitCode !== 0;

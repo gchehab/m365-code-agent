@@ -191,3 +191,67 @@ test('agent rebuilds a request only after a confirmed pre-submit length rejectio
   await assert.rejects(agent.run('중복 전송 금지'), /전송 확인/);
   assert.equal(attempts, 1);
 });
+
+test('large files support paged reads and exact partial edits without a complete read', async t => {
+  const { root, store } = await fixture(t);
+  const original = Array.from({ length: 1000 }, (_, i) => `const item${i} = "${'x'.repeat(65)}";`).join('\r\n');
+  await fs.writeFile(path.join(root, 'large.js'), original);
+  const page = await store.readFile('large.js', { startLine: 400, lineCount: 5, maxCharacters: 2000 });
+  assert.equal(page.startLine, 400); assert.equal(page.endLine, 404); assert.equal(page.totalLines, 1000); assert.equal(page.complete, false); assert.equal(page.nextLine, 405);
+  assert.equal(store.ledger.has('large.js'), false);
+  assert.ok(page.content.length < 2000);
+  const changes = await store.prepareChanges([{ path: 'large.js', action: 'edit', baseHash: page.hash, edits: [{ oldText: 'const item400 =', newText: 'const fixed400 =' }] }]);
+  assert.equal(changes[0].content, original.replace('const item400 =', 'const fixed400 ='));
+  await assert.rejects(store.prepareChanges([{ path: 'large.js', action: 'replace', baseHash: page.hash, content: 'bad' }]), /먼저/);
+  await assert.rejects(store.prepareChanges([{ path: 'large.js', action: 'edit', baseHash: page.hash, edits: [{ oldText: 'const item900 =', newText: 'bad' }] }]), /읽은 범위/);
+  await fs.writeFile(path.join(root, 'large.js'), original + '// user change');
+  await assert.rejects(store.verifyChanges(changes), /변경/);
+});
+
+test('partial edits reject ambiguous, overlapping and stale anchors, and preserve CRLF', async t => {
+  const { root, store } = await fixture(t);
+  await fs.writeFile(path.join(root, 'edit.txt'), 'same same\r\nunique alpha beta\r\nlast\r\n');
+  const file = await store.readFile('edit.txt', { startLine: 1, lineCount: 3, maxCharacters: 1000 });
+  const proposal = edits => [{ path: file.path, action: 'edit', baseHash: file.hash, edits }];
+  await assert.rejects(store.prepareChanges(proposal([{ oldText: 'same', newText: 'x' }])), /한 번/);
+  await assert.rejects(store.prepareChanges(proposal([{ oldText: 'unique alpha', newText: 'a' }, { oldText: 'alpha beta', newText: 'b' }])), /겹칩니다/);
+  const changes = await store.prepareChanges(proposal([{ oldText: 'unique alpha beta\nlast', newText: 'unique changed\nlast' }]));
+  assert.equal(changes[0].content, 'same same\r\nunique changed\r\nlast\r\n');
+  await fs.writeFile(path.join(root, 'edit.txt'), 'changed');
+  await assert.rejects(store.prepareChanges(proposal([{ oldText: 'unique alpha beta', newText: 'x' }])), /변경/);
+});
+
+test('search reads disk directly and never invokes editor hooks or grants an edit read', async t => {
+  const { root } = await fixture(t);
+  let hooks = 0;
+  const store = await new WorkspaceStore(root, async () => { hooks++; return 'unsaved content'; }).initialize();
+  assert.equal((await store.search('reduce')).matches.length, 1);
+  assert.equal(hooks, 0); assert.equal(store.ledger.size, 0); assert.equal(store.editReads.size, 0);
+  assert.equal((await store.readFile('src/average.js')).content, 'unsaved content');
+  assert.equal(hooks, 1);
+});
+
+test('additional credential and state file names are excluded', async t => {
+  const { store } = await fixture(t);
+  for (const name of ['.npmrc', 'nested/.netrc', 'id_rsa', 'id_ed25519', 'credentials', 'credentials.json', 'terraform.tfstate', 'terraform.tfstate.backup', 'appsettings.json', 'appsettings.Production.json', '.docker/config.json', '.kube/config']) assert.throws(() => store.normalize(name), /제외/);
+  assert.equal(store.normalize('src/credentials-helper.js'), 'src/credentials-helper.js');
+});
+
+test('execution settings always require review', () => {
+  const { requiresReview } = require('../src/policy');
+  for (const file of ['package.json', 'sub/package-lock.json', '.vscode/tasks.json', '.github/workflows/ci.yml', 'Makefile', 'scripts/test.ps1', 'setup.py', 'Dockerfile', 'build.gradle', 'x.csproj']) assert.equal(requiresReview(file), true, file);
+  assert.equal(requiresReview('src/average.js'), false);
+  assert.equal(requiresReview('README.md'), false);
+});
+
+test('stream decoding preserves UTF-8 split characters and CP949 output', () => {
+  const { outputDecoder } = require('../src/terminal');
+  const utf8 = outputDecoder('utf8');
+  let text = '';
+  for (const byte of Buffer.from('한글🙂')) text += utf8.write(Buffer.from([byte]));
+  assert.equal(text + utf8.end(), '한글🙂');
+  const korean = outputDecoder('cp949');
+  text = '';
+  for (const byte of [0xc7, 0xd1, 0xb1, 0xdb]) text += korean.write(Buffer.from([byte]));
+  assert.equal(text + korean.end(), '한글');
+});

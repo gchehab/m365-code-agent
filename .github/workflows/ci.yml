@@ -8,6 +8,7 @@ permissions:
 jobs:
   validate:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,8 +18,16 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - run: npm run test:integration
       - run: npm run package
       - uses: actions/upload-artifact@v4
         with:
           name: m365-code-agent-vsix
           path: dist/*.vsix
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vscode-test-report
+          path: |
+            .test-output/integration-*/vscode-test.log
+            .test-output/integration-*/workspace/vscode-test-result.json

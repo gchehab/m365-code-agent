@@ -7,6 +7,8 @@ const { WorkspaceStore, digest } = require('./workspace');
 const { CopilotBrowser } = require('./browser');
 const { CodingAgent } = require('./agent');
 const { CommandRunner } = require('./terminal');
+const { requiresReview } = require('./policy');
+const { renderWebview } = require('./view');
 
 class AgentView {
   constructor(context) {
@@ -16,6 +18,7 @@ class AgentView {
     this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
     this.attachments = [];
     this.checkpoints = [];
+    this.changedFiles = new Map();
     this.runner = new CommandRunner();
     this.starting = false;
     this.browser = null;
@@ -51,21 +54,7 @@ class AgentView {
     view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')] };
     const nonce = crypto.randomBytes(18).toString('base64');
     const resource = name => view.webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', name));
-    view.webview.html = `<!doctype html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.webview.cspSource}; script-src 'nonce-${nonce}';">
-<link rel="stylesheet" href="${resource('view.css')}"></head><body>
-<header><span class="brand">M365 <b>Code Agent</b></span><div class="toolbar"><button id="newChat" title="새 대화">＋</button><button id="history" title="대화 기록">기록</button><button id="diagnostics" title="연결 진단">⋯</button></div></header>
-<main id="messages" aria-live="polite"></main>
-<div id="welcome"><h2>어떤 작업을 할까요?</h2><p>코드를 살펴보고, 계획하고, 함께 수정하세요.</p><button class="suggestion" data-prompt="이 프로젝트의 구조와 실행 방법을 설명해줘." data-mode="ask">프로젝트 살펴보기</button><button class="suggestion" data-prompt="현재 파일을 검토하고 버그 가능성과 테스트 계획을 알려줘." data-mode="plan">코드 검토 계획</button></div>
-<footer><div id="status" role="status">Copilot 연결 후 회사 계정으로 로그인하세요.</div>
-<section id="changes" hidden><strong id="changeTitle">변경 검토</strong><div id="changeFiles"></div><div class="toolbar"><button id="apply">적용</button><button id="reject">거절</button></div></section>
-<section id="approval" hidden><strong>명령 실행 승인</strong><p id="commandRoot"></p><pre id="commandText"></pre><div class="toolbar"><button id="approveCommand">이번 명령 실행</button><button id="rejectCommand">거절</button></div></section>
-<div id="checkpoint" hidden><span>마지막 파일 변경</span><button id="undo">되돌리기</button></div>
-<form id="form"><div id="attachments"></div><label class="sr-only" for="task">개발 요청</label><textarea id="task" rows="3" maxlength="8000" placeholder="작업을 요청하세요. /plan · /review · /test"></textarea>
-<div class="composer-tools"><div class="toolbar"><label class="sr-only" for="mode">작업 모드</label><select id="mode" title="Ask: 읽기 · Plan: 계획 · Agent: 수정과 실행"><option value="agent">Agent</option><option value="ask">Ask</option><option value="plan">Plan</option></select><button id="attach" type="button" title="프로젝트 파일 첨부">＋ 파일</button><button id="connect" type="button" title="Copilot 연결 / 로그인">연결</button></div><div><button id="stop" type="button" hidden>■ 중지</button><button id="run" type="submit" title="전송 (Enter)">↑</button></div></div>
-<div class="preferences"><label><input type="checkbox" id="includeEditor" checked> 현재 파일</label><label><input type="checkbox" id="review" checked> 변경 승인</label><span>M365 Copilot</span></div></form>
-<p class="hint">Enter 전송 · Shift+Enter 줄바꿈 · 명령은 개별 승인 후 실행</p></footer>
-<script nonce="${nonce}" src="${resource('view.js')}"></script></body></html>`;
+    view.webview.html = renderWebview({ nonce, cspSource: view.webview.cspSource, resource });
     view.webview.onDidReceiveMessage(message => this.handle(message).catch(error => {
       this.post({ type: 'message', role: 'system', text: error.message });
       if (!this.starting && !this.agent?.running) this.post({ type: 'idle' });
@@ -95,7 +84,7 @@ class AgentView {
     }
     try { await this.browser.connect(); }
     catch (error) {
-      throw new Error(`M365 연결 실패: ${error.message}\nPC에 Edge가 설치되어 있고 회사 정책에서 브라우저 자동화가 허용되는지 확인하세요.`);
+      throw new Error(`M365 연결 실패: ${error.message}\nPC에 Edge가 설치되어 있고 회사 정책에서 브라우저 자동화가 허용되는지 확인하세요.`, { cause: error });
     }
     return this.browser;
   }
@@ -155,44 +144,44 @@ class AgentView {
     this.post({ type: 'busy' });
     let errorMessage;
     try {
-    const folder = await this.rootFolder();
-    const browser = await this.ensureBrowser();
-    if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-    const store = await new WorkspaceStore(folder.uri.fsPath, async target => {
-      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
-      return document.getText();
-    }).initialize();
-    const contextFiles = [];
-    const editor = vscode.window.activeTextEditor;
-    if (message.includeEditor && editor && editor.document.uri.scheme === 'file') {
-      const relative = path.relative(folder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, '/');
-      try {
+      const folder = await this.rootFolder();
+      const browser = await this.ensureBrowser();
+      if (this.stopRequested) throw new Error('작업을 중지했습니다.');
+      const store = await new WorkspaceStore(folder.uri.fsPath, async target => {
+        const document = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'file' && document.uri.fsPath === target);
+        return document ? document.getText() : new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(target));
+      }).initialize();
+      const contextFiles = [];
+      const editor = vscode.window.activeTextEditor;
+      if (message.includeEditor && editor && editor.document.uri.scheme === 'file') {
+        const relative = path.relative(folder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, '/');
+        try {
+          const file = await store.readFile(relative);
+          const selection = editor.selection.isEmpty ? file.content : editor.document.getText(editor.selection);
+          if (!editor.selection.isEmpty || selection.length > 10000) { store.ledger.delete(file.path); store.editReads.delete(file.path); }
+          if (selection.length <= 10000) contextFiles.push({ path: file.path, hash: file.hash, selectionOnly: !editor.selection.isEmpty, content: selection });
+          else this.post({ type: 'message', role: 'system', text: '열린 파일이 커서 자동 첨부를 생략했습니다. 에이전트가 필요한 파일을 요청합니다.' });
+        } catch { /* Outside-root or ignored files are not attached. */ }
+      }
+      for (const relative of this.attachments) {
+        if (contextFiles.some(file => file.path === relative && !file.selectionOnly)) continue;
         const file = await store.readFile(relative);
-        const selection = editor.selection.isEmpty ? file.content : editor.document.getText(editor.selection);
-        if (!editor.selection.isEmpty || selection.length > 10000) store.ledger.delete(file.path);
-        if (selection.length <= 10000) contextFiles.push({ path: file.path, hash: file.hash, selectionOnly: !editor.selection.isEmpty, content: selection });
-        else this.post({ type: 'message', role: 'system', text: '열린 파일이 커서 자동 첨부를 생략했습니다. 에이전트가 필요한 파일을 요청합니다.' });
-      } catch { /* Outside-root or ignored files are not attached. */ }
-    }
-    for (const relative of this.attachments) {
-      if (contextFiles.some(file => file.path === relative && !file.selectionOnly)) continue;
-      const file = await store.readFile(relative);
-      if (file.content.length > 10000) { store.ledger.delete(file.path); throw new Error(`첨부 파일이 큽니다: ${relative}. 첨부를 해제하면 에이전트가 검색으로 탐색할 수 있습니다.`); }
-      contextFiles.push(file);
-    }
-    if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
-    let task = message.task;
-    let mode = ['ask', 'plan', 'agent'].includes(message.mode) ? message.mode : 'agent';
-    if (/^\/plan(?:\s|$)/i.test(task)) { mode = 'plan'; task = task.replace(/^\/plan\s*/i, '') || '현재 프로젝트의 개선 계획을 세워줘.'; }
-    if (/^\/review(?:\s|$)/i.test(task)) { mode = 'ask'; task = '버그와 회귀 위험을 중심으로 코드를 검토하고 파일과 근거를 알려줘. ' + task.replace(/^\/review\s*/i, ''); }
-    if (/^\/test(?:\s|$)/i.test(task)) { mode = 'agent'; task = '프로젝트의 테스트 방법을 확인하고 필요한 테스트를 실행해서 실제 결과를 알려줘. ' + task.replace(/^\/test\s*/i, ''); }
-    if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-    this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
-      mode, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
-      maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
-      runCommand: command => this.runCommand(command, folder.uri.fsPath),
-      approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review)) });
-    await this.agent.run(task, JSON.stringify(contextFiles));
+        if (file.content.length > 10000) { store.ledger.delete(file.path); store.editReads.delete(file.path); contextFiles.push({ path: relative, omitted: '큰 파일입니다. read_file의 줄 범위로 읽으세요.' }); }
+        else contextFiles.push(file);
+      }
+      if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
+      let task = message.task;
+      let mode = ['ask', 'plan', 'agent'].includes(message.mode) ? message.mode : 'agent';
+      if (/^\/plan(?:\s|$)/i.test(task)) { mode = 'plan'; task = task.replace(/^\/plan\s*/i, '') || '현재 프로젝트의 개선 계획을 세워줘.'; }
+      if (/^\/review(?:\s|$)/i.test(task)) { mode = 'ask'; task = '버그와 회귀 위험을 중심으로 코드를 검토하고 파일과 근거를 알려줘. ' + task.replace(/^\/review\s*/i, ''); }
+      if (/^\/test(?:\s|$)/i.test(task)) { mode = 'agent'; task = '프로젝트의 테스트 방법을 확인하고 필요한 테스트를 실행해서 실제 결과를 알려줘. ' + task.replace(/^\/test\s*/i, ''); }
+      if (this.stopRequested) throw new Error('작업을 중지했습니다.');
+      this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
+        mode, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
+        maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
+        runCommand: command => this.runCommand(command, folder.uri.fsPath),
+        approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review)) });
+      await this.agent.run(task, JSON.stringify(contextFiles));
     } catch (error) { errorMessage = error.message; this.post({ type: 'message', role: 'system', text: error.message }); }
     finally {
       this.starting = false;
@@ -204,7 +193,8 @@ class AgentView {
     if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command)) throw new Error('명령 형식이 올바르지 않습니다.');
     if (this.stopRequested) throw new Error('작업을 중지했습니다.');
     const approved = await new Promise(resolve => {
-      const viewData = { type: 'commandApproval', command, root, token: crypto.randomUUID() };
+      const changedFiles = [...this.changedFiles.values()].filter(file => path.resolve(file.root).toLowerCase() === path.resolve(root).toLowerCase()).map(file => ({ path: file.path, id: this.previews.has(file.id + '-new') ? file.id : null, sensitive: requiresReview(file.path) }));
+      const viewData = { type: 'commandApproval', command, root, changedFiles, token: crypto.randomUUID() };
       this.pending = { kind: 'command', resolve, viewData };
       this.post(viewData);
     });
@@ -213,9 +203,12 @@ class AgentView {
     if (!approved || this.stopRequested) return { approved: false, message: '사용자가 실행을 거절했습니다. 다시 요청하지 마세요.' };
     this.output.appendLine(`\n> ${command}\n${root}`);
     this.output.show(true);
+    this.runner.encoding = this.config().get('commandOutputEncoding', 'utf8');
     return this.runner.run(command, root, text => this.output.append(text));
   }
   async stageAndApply(store, changes, summary, review) {
+    const forcedReview = changes.filter(change => requiresReview(change.path)).map(change => change.path);
+    review = review || forcedReview.length > 0;
     for (const change of changes) {
       const id = crypto.randomUUID();
       change.previewId = id;
@@ -223,7 +216,7 @@ class AgentView {
       this.previews.set(id + '-new', change.content);
       if (this.previews.size > 200) this.previews.delete(this.previews.keys().next().value);
     }
-    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, token: crypto.randomUUID() };
+    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, forcedReview, token: crypto.randomUUID() };
     if (review) {
       const approved = await new Promise(resolve => { this.pending = { kind: 'changes', resolve, changes, viewData }; this.post(viewData); });
       this.pending = null;
@@ -252,6 +245,7 @@ class AgentView {
     if (this.agent?.cancelled) return false;
     if (!await vscode.workspace.applyEdit(edit, { isRefactoring: false })) throw new Error('VS Code가 변경 적용을 거부했습니다. 편집기에서 파일 상태를 확인하세요.');
     this.checkpoints.push({ store, changes });
+    for (const change of changes) this.changedFiles.set(store.root.toLowerCase() + '\0' + change.path.toLowerCase(), { root: store.root, path: change.path, id: change.previewId });
     this.checkpoints = this.checkpoints.slice(-20);
     this.post({ type: 'undoState', available: true });
     const failed = [];
@@ -282,6 +276,12 @@ class AgentView {
     }
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('되돌리기를 적용하지 못했습니다.');
     this.checkpoints.pop();
+    for (const change of checkpoint.changes) {
+      const key = checkpoint.store.root.toLowerCase() + '\0' + change.path.toLowerCase();
+      const previous = [...this.checkpoints].reverse().filter(item => item.store.root === checkpoint.store.root).flatMap(item => item.changes).find(item => item.path === change.path);
+      if (previous) this.changedFiles.set(key, { root: checkpoint.store.root, path: previous.path, id: previous.previewId });
+      else this.changedFiles.delete(key);
+    }
     for (const uri of saves) if (!await (await vscode.workspace.openTextDocument(uri)).save()) throw new Error('되돌린 내용을 저장하지 못했습니다. 편집기를 확인하세요.');
     this.post({ type: 'message', role: 'system', text: '마지막 파일 변경을 되돌렸습니다. 터미널에서 발생한 변경은 포함하지 않습니다.' });
     this.post({ type: 'undoState', available: this.checkpoints.length > 0 });
