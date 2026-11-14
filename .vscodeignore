@@ -1,0 +1,11 @@
+test/**
+dist/**
+.vscode/**
+.test-output/**
+.gitignore
+.github/**
+scripts/**
+node_modules/.cache/**
+package-lock.json
+*.zip
+*.log
