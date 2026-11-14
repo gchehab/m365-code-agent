@@ -124,10 +124,14 @@ window.addEventListener('message', ({ data }) => {
     el('approval').hidden = false; el('commandText').textContent = data.command; el('commandRoot').textContent = `작업 폴더: ${data.root}`; el('status').textContent = '명령 실행 승인 대기 중';
     el('commandChanges').replaceChildren();
     if (data.changedFiles?.length) {
-      const title = document.createElement('p'); title.textContent = '이 작업 영역에서 확장이 수정한 파일 · 파일명을 눌러 diff 검토'; el('commandChanges').append(title);
-      for (const file of data.changedFiles) {
-        const button = document.createElement('button'); button.className = 'file'; button.textContent = `${file.sensitive ? '실행 설정 · ' : ''}${file.path}`; button.disabled = !file.id;
-        button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id })); el('commandChanges').append(button);
+      for (const currentTask of [true, false]) {
+        const files = data.changedFiles.filter(file => Boolean(file.currentTask) === currentTask);
+        if (!files.length) continue;
+        const title = document.createElement('p'); title.textContent = (currentTask ? '이번 요청에서 변경한 파일' : '이전 요청에서 변경한 파일') + ' · 파일명을 눌러 diff 검토'; el('commandChanges').append(title);
+        for (const file of files) {
+          const button = document.createElement('button'); button.className = 'file'; button.textContent = `${file.sensitive ? '실행 설정 · ' : ''}${file.path}`; button.disabled = !file.id;
+          button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id })); el('commandChanges').append(button);
+        }
       }
     }
   }

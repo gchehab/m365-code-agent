@@ -4,21 +4,26 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const { setInterval, clearInterval } = require('node:timers');
-const { WorkspaceStore, digest } = require('./workspace');
-const { CopilotBrowser, validateCopilotUrl } = require('./browser');
+const { WorkspaceStore } = require('./workspace');
+const { CopilotBrowser } = require('./browser');
 const { CodingAgent } = require('./agent');
 const { CommandRunner } = require('./terminal');
-const { requiresReview } = require('./policy');
 const { renderWebview } = require('./view');
 const { inspectProject } = require('./project');
-const { requestsEdits } = require('./project');
+const { resolveTask } = require('./task');
 const { decorate } = require('./markdown');
 const { mergeHistory } = require('./web-history');
-const { conversationUrl } = require('./web-history');
+
+const { ConversationController } = require('./conversations');
+const { ModelController } = require('./models');
+const { ChangeController } = require('./changes');
 
 class AgentView {
   constructor(context) {
     this.context = context;
+    this.conversations = new ConversationController(this, vscode);
+    this.models = new ModelController(this);
+    this.changes = new ChangeController(this, vscode);
     this.sessions = context.workspaceState.get('sessions', []);
     this.sessionId = context.workspaceState.get('activeSession');
     this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
@@ -51,15 +56,9 @@ class AgentView {
     this.view?.webview.postMessage(decorate(event));
     if (event.type === 'status') this.output.appendLine(event.text);
   }
-  saveSession() {
-    if (!this.sessionId) this.sessionId = crypto.randomUUID();
-    const session = { id: this.sessionId, title: this.events.find(event => event.role === 'user')?.text.slice(0, 70) || '새 대화', updated: Date.now(), events: this.events, webUrl: this.webUrl, newWebChat: Boolean(this.newWebChat) };
-    this.sessions = [session, ...this.sessions.filter(item => item.id !== session.id)].slice(0, 20);
-    this.context.workspaceState.update('sessions', this.sessions);
-    this.context.workspaceState.update('activeSession', this.sessionId);
-  }
+  saveSession() { return this.conversations.saveSession(); }
   state() {
-    return { type: 'history', events: this.events.map(decorate), running: this.starting || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel };
+    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -131,76 +130,11 @@ class AgentView {
     const result = await this.browser.diagnostics();
     this.post({ type: 'message', role: 'system', text: `전용 브라우저 연결: ${result.title}\n${result.url}\n회사 계정 로그인 후 대화 화면에서 작업을 시작하세요.` });
   }
-  async newChat() {
-    if (this.starting || this.agent?.running) throw new Error('진행 중인 작업을 먼저 중지하세요.');
-    this.saveSession();
-    this.sessionId = crypto.randomUUID();
-    this.events = [];
-    this.webUrl = undefined;
-    this.newWebChat = true;
-    this.attachments = [];
-    this.saveSession();
-    this.view?.webview.postMessage(this.state());
-    this.post({ type: 'status', text: '새 대화 · 작업을 입력하세요.' });
-  }
-  async showHistory() {
-    if (this.starting || this.agent?.running) return;
-    const selected = await vscode.window.showQuickPick(this.sessions.filter(session => session.events.length).map(session => ({ label: session.title, description: new Date(session.updated).toLocaleString(), session })), { placeHolder: '이어서 작업할 대화' });
-    if (!selected) return;
-    this.sessionId = selected.session.id;
-    this.events = selected.session.events;
-    this.webUrl = selected.session.webUrl;
-    const linked = this.webPages.get(this.sessionId);
-    this.newWebChat = !this.webUrl && (!linked || linked.isClosed());
-    if (linked && !linked.isClosed() && (!this.webUrl || conversationUrl(linked.url()).url === this.webUrl)) this.browser.page = linked;
-    else if (this.webUrl) { const browser = await this.ensureBrowser(); browser.page = await browser.context.newPage(); await browser.page.goto(validateCopilotUrl(this.webUrl), { waitUntil: 'domcontentloaded' }); this.webPages.set(this.sessionId, browser.page); }
-    this.saveSession();
-    this.view?.webview.postMessage(this.state());
-  }
-  async syncWeb(manual = true) {
-    if (this.starting || this.agent?.running || this.syncing) return;
-    if (this.newWebChat) { if (manual) this.post({ type: 'status', text: '이 대화는 첫 요청을 보내면 새 웹 대화와 연결됩니다.' }); return; }
-    if (!this.browser?.page || this.browser.page.isClosed() || !this.browser.readConversation) { if (manual) throw new Error('먼저 Copilot을 연결하고 웹 대화를 여세요.'); return; }
-    this.syncing = true;
-    try {
-      if (!manual && !this.view?.visible) return;
-      const snapshot = await this.browser.readConversation();
-      if (this.starting || this.agent?.running) return;
-      if (this.webUrl && !snapshot.restorable) { if (manual) this.post({ type: 'status', text: '웹 대화 주소가 아직 정해지지 않았습니다. 웹에서 대화를 시작한 뒤 동기화하세요.' }); return; }
-      const previousUrl = this.webUrl;
-      if (snapshot.restorable && this.webUrl !== snapshot.url) {
-        this.webPages.delete(this.sessionId);
-        const session = this.sessions.find(session => session.webUrl === snapshot.url);
-        if (session) { this.sessionId = session.id; this.events = session.events; }
-        else if (this.webUrl) { this.saveSession(); this.sessionId = crypto.randomUUID(); this.events = []; }
-        this.webUrl = snapshot.url;
-      }
-      const merged = mergeHistory(this.events, snapshot.messages);
-      const changed = JSON.stringify(merged) !== JSON.stringify(this.events);
-      this.events = merged;
-      if (changed || previousUrl !== this.webUrl) this.saveSession();
-      this.webPages.set(this.sessionId, this.browser.page);
-      if (changed || previousUrl !== this.webUrl || manual) this.view?.webview.postMessage(this.state());
-      if (manual) this.post({ type: 'status', text: snapshot.messages.length ? `웹 대화 동기화 · ${snapshot.messages.length}개 메시지 확인` : '웹 대화 메시지 영역을 읽지 못했습니다. 현재 로컬 기록은 유지했습니다.' });
-    } finally { this.syncing = false; }
-  }
-  async refreshModels() {
-    if (this.starting || this.agent?.running) return;
-    this.starting = true; this.stopRequested = false; this.post({ type: 'busy' });
-    try {
-      const browser = await this.ensureBrowser(); browser.cancelled = false;
-      this.modelChoices = await browser.models(text => this.post({ type: 'status', text }));
-      this.post({ type: 'models', choices: this.modelChoices, selected: this.selectedModel });
-    } finally { this.starting = false; this.post({ type: 'idle' }); }
-  }
-  async chooseModel(id) {
-    if (this.starting || this.agent?.running) return;
-    if (!id) { this.selectedModel = ''; return; }
-    this.starting = true; this.post({ type: 'busy' });
-    try { const browser = await this.ensureBrowser(); browser.cancelled = false; const label = await browser.selectModel(id, text => this.post({ type: 'status', text })); this.selectedModel = id; this.post({ type: 'models', choices: this.modelChoices, selected: id }); this.post({ type: 'status', text: 'M365 모델 선택: ' + label }); }
-    catch (error) { this.post({ type: 'models', choices: this.modelChoices, selected: this.selectedModel }); throw error; }
-    finally { this.starting = false; this.post({ type: 'idle' }); }
-  }
+  async newChat() { return this.conversations.newChat(); }
+  async showHistory() { return this.conversations.showHistory(); }
+  async syncWeb(manual = true) { return this.conversations.syncWeb(manual); }
+  async refreshModels() { return this.models.refreshModels(); }
+  async chooseModel(id) { return this.models.chooseModel(id); }
   async attachFiles() {
     if (this.starting || this.agent?.running) return;
     const folder = await this.rootFolder();
@@ -226,6 +160,7 @@ class AgentView {
   }
   async stop() {
     this.stopRequested = true;
+    this.conversations.invalidate();
     this.runner.stop();
     if (this.pending) { const pending = this.pending; this.pending = null; pending.resolve(false); }
     if (this.agent) await this.agent.stop();
@@ -233,8 +168,10 @@ class AgentView {
     this.post({ type: 'status', text: '중지 요청됨. 이후 응답은 파일에 적용하지 않습니다.' });
   }
   async start(message) {
-    if (this.starting || this.agent?.running) throw new Error('이미 실행 중입니다.');
+    if (this.starting || this.sessionSwitching || this.agent?.running) throw new Error('이미 작업 또는 대화 전환 중입니다.');
     this.starting = true;
+    this.taskId = crypto.randomUUID();
+    this.conversations.invalidate();
     this.stopRequested = false;
     this.post({ type: 'busy' });
     let errorMessage;
@@ -264,25 +201,14 @@ class AgentView {
         else contextFiles.push(file);
       }
       if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
-      let task = message.task;
-      let mode = requestsEdits(task, 'agent') || /테스트.*(실행|돌려)|빌드.*(실행|해줘)|\brun\b.*\b(test|build)/i.test(task) ? 'agent' : /계획|\bplan\b/i.test(task) ? 'plan' : 'ask';
-      if (/^\/plan(?:\s|$)/i.test(task)) { mode = 'plan'; task = task.replace(/^\/plan\s*/i, '') || '현재 프로젝트의 개선 계획을 세워줘.'; }
-      if (/^\/review(?:\s|$)/i.test(task)) { mode = 'ask'; task = '버그와 회귀 위험을 중심으로 코드를 검토하고 파일과 근거를 알려줘. ' + task.replace(/^\/review\s*/i, ''); }
-      if (/^\/test(?:\s|$)/i.test(task)) { mode = 'agent'; task = '프로젝트의 테스트 방법을 확인하고 필요한 테스트를 실행해서 실제 결과를 알려줘. ' + task.replace(/^\/test\s*/i, ''); }
+      const { task, mode } = resolveTask(message.task);
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.saveSession();
       if (browser.waitForComposer && browser.context) {
         browser.cancelled = false;
         await browser.waitForComposer(text => this.post({ type: 'status', text }));
         if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-        const linked = this.webPages.get(this.sessionId);
-        if (linked && !linked.isClosed() && (!this.webUrl || conversationUrl(linked.url()).url === this.webUrl)) browser.page = linked;
-        else if (this.webUrl) await browser.page.goto(validateCopilotUrl(this.webUrl), { waitUntil: 'domcontentloaded' });
-        else if (this.newWebChat) {
-          browser.page = await browser.context.newPage(); await browser.page.goto(validateCopilotUrl(browser.options.url || this.config().get('copilotUrl')), { waitUntil: 'domcontentloaded' });
-          await browser.waitForComposer(text => this.post({ type: 'status', text })); await browser.newChat(); this.newWebChat = false;
-        }
-        this.webPages.set(this.sessionId, browser.page);
+        await this.conversations.prepareWeb();
         const snapshot = await browser.readConversation();
         if (!this.webUrl || snapshot.url === this.webUrl) { this.events = mergeHistory(this.events, snapshot.messages); if (snapshot.restorable) this.webUrl = snapshot.url; this.saveSession(); this.view?.webview.postMessage(this.state()); }
       }
@@ -300,104 +226,9 @@ class AgentView {
       this.post({ type: 'status', text: errorMessage || '완료 · 다음 요청을 이어서 입력하세요.', error: Boolean(errorMessage) });
     }
   }
-  async runCommand(command, root) {
-    if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command)) throw new Error('명령 형식이 올바르지 않습니다.');
-    if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-    const approved = await new Promise(resolve => {
-      const changedFiles = [...this.changedFiles.values()].filter(file => path.resolve(file.root).toLowerCase() === path.resolve(root).toLowerCase()).map(file => ({ path: file.path, id: this.previews.has(file.id + '-new') ? file.id : null, sensitive: requiresReview(file.path) }));
-      const viewData = { type: 'commandApproval', command, root, changedFiles, token: crypto.randomUUID() };
-      this.pending = { kind: 'command', resolve, viewData };
-      this.post(viewData);
-    });
-    this.pending = null;
-    this.post({ type: 'approvalClosed' });
-    if (!approved || this.stopRequested) return { approved: false, message: '사용자가 실행을 거절했습니다. 다시 요청하지 마세요.' };
-    this.output.appendLine(`\n> ${command}\n${root}`);
-    this.output.show(true);
-    this.runner.encoding = this.config().get('commandOutputEncoding', 'utf8');
-    return this.runner.run(command, root, text => this.output.append(text));
-  }
-  async stageAndApply(store, changes, summary, review) {
-    const forcedReview = changes.filter(change => requiresReview(change.path)).map(change => change.path);
-    review = review || forcedReview.length > 0;
-    for (const change of changes) {
-      const id = crypto.randomUUID();
-      change.previewId = id;
-      this.previews.set(id + '-old', change.original);
-      this.previews.set(id + '-new', change.content);
-      if (this.previews.size > 200) this.previews.delete(this.previews.keys().next().value);
-    }
-    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, forcedReview, token: crypto.randomUUID() };
-    if (review) {
-      this.post({ type: 'status', text: `파일 ${changes.length}개 변경 승인 대기 · diff를 확인하고 적용을 누르세요.` });
-      const approved = await new Promise(resolve => { this.pending = { kind: 'changes', resolve, changes, viewData }; this.post(viewData); });
-      this.pending = null;
-      this.post({ type: 'reviewClosed' });
-      if (!approved || this.agent?.cancelled) return false;
-    } else this.post(viewData);
-    if (this.agent?.cancelled) return false;
-    await store.verifyChanges(changes);
-    const edit = new vscode.WorkspaceEdit();
-    const documents = [];
-    for (const change of changes) {
-      const uri = vscode.Uri.file(change.target);
-      if (change.action === 'create') {
-        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.target)));
-        edit.createFile(uri, { overwrite: false, ignoreIfExists: false });
-        edit.insert(uri, new vscode.Position(0, 0), change.content);
-      } else {
-        const document = await vscode.workspace.openTextDocument(uri);
-        if (document.isDirty) throw new Error(`저장하지 않은 변경이 있는 파일입니다. 먼저 저장 후 다시 요청하세요: ${change.path}`);
-        if (digest(document.getText()) !== change.expectedHash) throw new Error(`파일이 변경되었습니다: ${change.path}`);
-        edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), change.content);
-      }
-      documents.push(uri);
-    }
-    await store.verifyChanges(changes);
-    if (this.agent?.cancelled) return false;
-    if (!await vscode.workspace.applyEdit(edit, { isRefactoring: false })) throw new Error('VS Code가 변경 적용을 거부했습니다. 편집기에서 파일 상태를 확인하세요.');
-    this.checkpoints.push({ store, changes });
-    for (const change of changes) this.changedFiles.set(store.root.toLowerCase() + '\0' + change.path.toLowerCase(), { root: store.root, path: change.path, id: change.previewId });
-    this.checkpoints = this.checkpoints.slice(-20);
-    this.post({ type: 'undoState', available: true });
-    const failed = [];
-    for (const [index, uri] of documents.entries()) {
-      const document = await vscode.workspace.openTextDocument(uri);
-      if (!await document.save()) failed.push(path.basename(uri.fsPath));
-      changes[index].appliedHash = digest(document.getText());
-      changes[index].diskHash = await fs.readFile(uri.fsPath, 'utf8').then(digest).catch(() => null);
-    }
-    if (failed.length) throw new Error(`편집기에 적용했지만 저장하지 못한 파일이 있습니다: ${failed.join(', ')}. 직접 확인하세요.`);
-    this.post({ type: 'message', role: 'system', text: `${changes.length}개 파일을 적용하고 저장했습니다. 테스트는 실행하지 않았습니다.` });
-    this.post({ type: 'applied' });
-    return true;
-  }
-  async undo() {
-    if (this.starting || this.agent?.running) throw new Error('작업 완료 후 되돌릴 수 있습니다.');
-    const checkpoint = this.checkpoints.at(-1);
-    if (!checkpoint) return;
-    const edit = new vscode.WorkspaceEdit();
-    const saves = [];
-    for (const change of checkpoint.changes) {
-      await checkpoint.store.resolve(change.path);
-      const uri = vscode.Uri.file(change.target);
-      const document = await vscode.workspace.openTextDocument(uri);
-      if (document.isDirty || digest(document.getText()) !== change.appliedHash || digest(await fs.readFile(change.target, 'utf8')) !== change.diskHash) throw new Error(`이후 편집이 있어 되돌릴 수 없습니다: ${change.path}`);
-      if (change.action === 'create') edit.deleteFile(uri, { recursive: false });
-      else { edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), change.original); saves.push(uri); }
-    }
-    if (!await vscode.workspace.applyEdit(edit)) throw new Error('되돌리기를 적용하지 못했습니다.');
-    this.checkpoints.pop();
-    for (const change of checkpoint.changes) {
-      const key = checkpoint.store.root.toLowerCase() + '\0' + change.path.toLowerCase();
-      const previous = [...this.checkpoints].reverse().filter(item => item.store.root === checkpoint.store.root).flatMap(item => item.changes).find(item => item.path === change.path);
-      if (previous) this.changedFiles.set(key, { root: checkpoint.store.root, path: previous.path, id: previous.previewId });
-      else this.changedFiles.delete(key);
-    }
-    for (const uri of saves) if (!await (await vscode.workspace.openTextDocument(uri)).save()) throw new Error('되돌린 내용을 저장하지 못했습니다. 편집기를 확인하세요.');
-    this.post({ type: 'message', role: 'system', text: '마지막 파일 변경을 되돌렸습니다. 터미널에서 발생한 변경은 포함하지 않습니다.' });
-    this.post({ type: 'undoState', available: this.checkpoints.length > 0 });
-  }
+  async runCommand(command, root) { return this.changes.runCommand(command, root); }
+  async stageAndApply(store, changes, summary, review) { return this.changes.stageAndApply(store, changes, summary, review); }
+  async undo() { return this.changes.undo(); }
   async handle(message) {
     if (!message || typeof message.type !== 'string') return;
     if (message.type === 'ready') { this.view.webview.postMessage(this.state()); return; }

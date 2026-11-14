@@ -71,12 +71,13 @@ test('directory listing and scoped search reach nested project code', async t =>
   assert.equal((await store.search('value', ['src'])).matches[0].path, 'src/main.js');
 });
 
-test('a model cannot report a requested edit completed without applying changes', async t => {
+test('a completion with no edits reports actual zero changes without forcing a changes response', async t => {
   const { store } = await fixture(t);
-  let count = 0;
-  const agent = new CodingAgent({ store, emit: () => {}, transport: { async request() { count++; return { kind: 'done', message: '수정 완료' }; } } });
-  await assert.rejects(agent.run('main.js를 수정해줘'), /적용한 파일은 0개/);
-  assert.equal(count, 2);
+  let count = 0; const events = [];
+  const agent = new CodingAgent({ store, emit: event => events.push(event), transport: { async request() { count++; return { kind: 'done', message: '수정 완료' }; } } });
+  assert.equal((await agent.run('main.js를 수정해줘')).appliedFiles, 0);
+  assert.equal(count, 1);
+  assert.match(events.at(-2).text, /실제 적용한 파일: 0개/);
 });
 
 test('UTF-16 BOM source files can be read without being mistaken for binary', async t => {
@@ -86,10 +87,47 @@ test('UTF-16 BOM source files can be read without being mistaken for binary', as
   assert.equal((await store.readFile('Example.cs')).content, content);
 });
 
-test('natural-language edit intent recognizes creation and keeps explanation/planning read-only', () => {
-  const { requestsEdits } = require('../src/project');
-  assert.equal(requestsEdits('빈 배열은 null로 반환하고 회귀 테스트도 생성해줘.', 'agent'), true);
-  assert.equal(requestsEdits('수정하지 말고 설명해줘.', 'agent'), false);
-  assert.equal(requestsEdits('구현 계획을 알려줘.', 'agent'), false);
-  assert.equal(requestsEdits('explain and fix the bug', 'agent'), true);
+test('natural-language questions cannot be forced into edits and unknown edit wording retains tools', async t => {
+  const { resolveTask } = require('../src/task');
+  const edits = ['README 업데이트해줘', '리팩토링해줘', '정리해줘', '개선해줘', '로그 넣어줘', '빈 배열은 null로 반환하고 회귀 테스트도 생성해줘.', 'explain and fix the bug', '설명하고 버그를 고쳐줘'];
+  for (const task of edits) assert.equal(resolveTask(task).mode, 'agent', task);
+  const questions = ['어떻게 수정하면 좋을지 알려줘', '왜 수정이 필요한지 설명해줘', '수정하지 말고 설명해줘.', '구현 계획을 알려줘.', '앞의 작업을 설명해줘.', 'Explain how to fix this bug'];
+  const { store } = await fixture(t);
+  for (const task of questions) {
+    const resolved = resolveTask(task);
+    assert.notEqual(resolved.mode, 'agent', task);
+    let requests = 0, approvals = 0;
+    const agent = new CodingAgent({ store, ...resolved, emit: () => {}, approveAndApply: async () => { approvals++; }, transport: { async request() { requests++; return { kind: 'done', message: '설명입니다.' }; } } });
+    assert.equal((await agent.run(resolved.task)).appliedFiles, 0);
+    assert.equal(requests, 1, task); assert.equal(approvals, 0, task);
+  }
+});
+
+test('a read-only question rejects model-proposed changes instead of invoking approval/apply', async t => {
+  const { store } = await fixture(t), { resolveTask } = require('../src/task');
+  let requests = 0, approvals = 0;
+  const task = '왜 수정이 필요한지 설명해줘';
+  const agent = new CodingAgent({ store, ...resolveTask(task), emit: () => {}, approveAndApply: async () => { approvals++; }, transport: { async request() {
+    if (++requests === 1) return { kind: 'changes', files: [{ path: 'unexpected.js', action: 'create', baseHash: null, content: 'unexpected' }] };
+    return { kind: 'done', message: '설명입니다.' };
+  } } });
+  assert.equal((await agent.run(task)).appliedFiles, 0);
+  assert.equal(approvals, 0);
+});
+
+test('bounded tool batches retain useful source and explicitly defer excess calls without execution', async t => {
+  const { root, store } = await fixture(t);
+  await fs.writeFile(path.join(root, 'src/main.js'), 'x'.repeat(3000));
+  let requests = 0, commands = 0;
+  const agent = new CodingAgent({ store, emit: () => {}, runCommand: async () => { commands++; }, transport: { async request(prompt) {
+    if (++requests === 1) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/main.js' }, { name: 'read_file', path: 'src/main.js' }, { name: 'run_command', command: 'unexpected-command' }] };
+    const data = JSON.parse(prompt.split('DATA: ')[1]);
+    const results = data.history.at(-1).observations;
+    assert.ok(results[0].result.content.length >= 2500); assert.ok(results[1].result.content.length >= 2500);
+    assert.match(results[2].error, /실행하지 않았습니다/);
+    assert.ok(prompt.length <= 12000);
+    return { kind: 'done', message: '읽음' };
+  } } });
+  await agent.run('본문 분석');
+  assert.equal(commands, 0);
 });

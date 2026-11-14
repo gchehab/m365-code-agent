@@ -24,9 +24,10 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
   const ranked = rankFiles(listing.files, task);
   const observations = [];
   let remaining = Math.max(1000, Math.min(6000, Math.floor(maxCharacters * 0.4)));
+  const initialReads = Math.max(1, Math.min(4, Math.floor(maxCharacters / 6000)));
   for (const file of ranked.slice(0, 12)) {
     if (cancelled()) throw new Error('작업을 중지했습니다.');
-    if (remaining < 300 || observations.filter(item => item.result).length >= 4) break;
+    if (remaining < 300 || observations.filter(item => item.result).length >= initialReads) break;
     emit({ type: 'tool', id: 'project:' + file, label: 'read_file · ' + file, state: 'running' });
     try {
       const result = await store.readFile(file, { startLine: 1, lineCount: 60, maxCharacters: Math.min(1800, remaining) });
@@ -43,7 +44,4 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
   return { files: { files: ranked.slice(0, 250), directories: listing.directories || [], truncated: listing.truncated || ranked.length > 250 }, history: { kind: 'tool_results', origin: 'automatic_workspace_inspection', observations }, read, discovered: listing.files.length };
 }
 
-function requestsEdits(task, mode) {
-  return mode === 'agent' && !/수정하지|변경하지|변경 없이|수정 방법|(?:수정|구현|변경|개발)\s*계획|do not (?:edit|change)|explain (?:how|why)|how to/i.test(task) && /수정|고쳐|변경해|바꿔|리팩터|구현|추가해|만들어|작성해|생성해|적용해|\b(fix|edit|modify|implement|refactor|create|generate|update|apply|add)\b/i.test(task);
-}
-module.exports = { inspectProject, requestsEdits, rankFiles };
+module.exports = { inspectProject, rankFiles };

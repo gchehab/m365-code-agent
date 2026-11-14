@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1
+
+- Remove word-triggered forced-edit retries. Unknown edit wording retains normal tools; explicit explanation/advice questions and read-only shortcuts cannot apply changes. Report the actual applied-file count separately from model text.
+- Expand mandatory review to executable test/tool configs, pytest/tox/nox files, Cargo settings and Gradle/Maven wrappers. Group command-review changes by current versus earlier request without dropping earlier evidence.
+- Reuse the current automation tab for history/new-chat navigation, prune closed references and preserve manually written web drafts.
+- Invalidate pending history sync on chat selection, new chat, task start and cancellation. Reject stale snapshots even after switching away and back to the same session.
+- Extract conversation, model-selection and file-change/command controllers from the extension entry point.
+- Keep the 12,000-character default. Bound tool batches to 1–4 calls by input budget (2 at the default), explicitly defer excess calls, and inspect fewer source files initially.
+- Pin all direct runtime/development dependencies to the exact lockfile versions.
+
 ## 0.5.0
 
 - Keep the first request queued through login/MFA, new authentication tabs and composer hydration. Retry only confirmed pre-submit resets; restore failed tasks without overwriting new drafts.

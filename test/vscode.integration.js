@@ -64,6 +64,32 @@ async function run() {
   };
   await provider.start({ task: '앞의 작업을 설명해줘.', mode: 'ask', includeEditor: false });
 
+  // Previously unrecognized wording must still reach real file editing tools.
+  const readmePath = path.join(root, 'README.md');
+  await fs.writeFile(readmePath, 'Before\n');
+  let updateRound = 0;
+  provider.browser.request = async () => {
+    if (++updateRound === 1) return { kind: 'tools', calls: [{ name: 'read_file', path: 'README.md' }] };
+    if (updateRound === 2) return { kind: 'changes', files: [{ path: 'README.md', action: 'edit', baseHash: digest('Before\n'), edits: [{ oldText: 'Before', newText: 'After' }] }] };
+    return { kind: 'done', message: 'README 업데이트 완료' };
+  };
+  await provider.start({ task: 'README 업데이트해줘', includeEditor: false, review: false });
+  assert.equal(await fs.readFile(readmePath, 'utf8'), 'After\n');
+  assert.equal(provider.agent.mode, 'agent');
+  const checkpointCount = provider.checkpoints.length;
+  let explanationRequests = 0;
+  provider.browser.request = async () => { explanationRequests++; return { kind: 'done', message: '이유 설명' }; };
+  await provider.start({ task: '왜 수정이 필요한지 설명해줘', includeEditor: false, review: false });
+  assert.equal(provider.agent.mode, 'ask');
+  assert.equal(explanationRequests, 1);
+  assert.equal(provider.checkpoints.length, checkpointCount);
+  const previousChanges = provider.runCommand('npm test', root);
+  assert.ok(provider.pending.viewData.changedFiles.some(file => file.path === 'README.md' && file.currentTask === false));
+  await provider.handle({ type: 'rejectCommand', token: provider.pending.viewData.token });
+  await previousChanges;
+  await provider.undo();
+  assert.equal(await fs.readFile(readmePath, 'utf8'), 'Before\n');
+
   // Disabling normal review cannot bypass review of executable configuration.
   const { WorkspaceStore } = require('../src/workspace');
   const guardedStore = await new WorkspaceStore(root).initialize();

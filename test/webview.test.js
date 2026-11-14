@@ -71,8 +71,10 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   assert.match(await page.locator('#reviewReason').textContent(), /자동 적용/);
   await page.locator('#apply').click();
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'apply'))).token, 'review-123');
-  await host({ type: 'commandApproval', command: 'npm test', root: 'C:\\workspace\\sample', changedFiles: [{ path: 'package.json', sensitive: true, id: 'preview-1' }], token: 'cmd-123' });
+  await host({ type: 'commandApproval', command: 'npm test', root: 'C:\\workspace\\sample', changedFiles: [{ path: 'package.json', sensitive: true, id: 'preview-1', currentTask: true }, { path: 'src/earlier.js', id: 'earlier', currentTask: false }], token: 'cmd-123' });
   assert.match(await page.locator('#commandChanges').textContent(), /실행 설정 · package.json/);
+  assert.match(await page.locator('#commandChanges').textContent(), /이번 요청에서 변경한 파일/);
+  assert.match(await page.locator('#commandChanges').textContent(), /이전 요청에서 변경한 파일/);
   await page.locator('#approveCommand').click();
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'approveCommand'))).token, 'cmd-123');
   await host({ type: 'idle' });

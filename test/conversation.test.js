@@ -6,6 +6,7 @@ const { parseReply, buildPrompt } = require('../src/protocol');
 const { conversationUrl, historyMessages, mergeHistory } = require('../src/web-history');
 const { renderMarkdown } = require('../src/markdown');
 const { CopilotBrowser } = require('../src/browser');
+const { ConversationController } = require('../src/conversations');
 
 test('equivalent JSON widgets are deduplicated without hiding distinct edits', () => {
   const file = { path: 'a.js', action: 'edit', baseHash: 'abc', edits: [{ oldText: 'one', newText: 'two' }] };
@@ -128,5 +129,13 @@ test('Edge preserves a queued request across login, retries only an unsent hydra
     assert.deepEqual(result.messages.map(event => event.text), ['웹 질문', '웹 답변']);
     assert.equal(result.url, 'https://m365.cloud.microsoft/chat?threadId=manual');
     assert.equal(await transport.page.evaluate(() => window.sends), 0);
+  });
+  await t.test('switching web history cannot erase a manually written browser draft', async () => {
+    const transport = await fixture();
+    await transport.page.locator('textarea').fill('작성 중인 웹 질문');
+    const controller = new ConversationController({ async ensureBrowser() { return transport; } }, {});
+    await assert.rejects(controller.openWeb('https://m365.cloud.microsoft/chat?threadId=another'), /작성 중인 내용/);
+    assert.equal(await transport.page.locator('textarea').inputValue(), '작성 중인 웹 질문');
+    assert.equal(transport.page.url(), 'https://m365.cloud.microsoft/chat');
   });
 });

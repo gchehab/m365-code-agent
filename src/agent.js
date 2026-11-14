@@ -1,6 +1,6 @@
 'use strict';
-const { buildPrompt, newId, normalizeToolCall } = require('./protocol');
-const { inspectProject, requestsEdits } = require('./project');
+const { buildPrompt, newId, normalizeToolCall, toolCallLimit } = require('./protocol');
+const { inspectProject } = require('./project');
 
 class CodingAgent {
   constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', maxRounds = 12, maxPromptCharacters = 12000 }) {
@@ -16,7 +16,7 @@ class CodingAgent {
     this.cancelled = false;
     const history = this.conversation.slice(-12).map(event => ({ role: event.role, text: event.text.slice(0, 4000) }));
     let promptBudget = Math.min(this.maxPromptCharacters, this.transport.promptCharacterLimit ?? this.maxPromptCharacters);
-    let appliedFiles = 0, prematureCompletions = 0;
+    let appliedFiles = 0;
     try {
       this.emit({ type: 'message', role: 'user', text: task });
       const project = await inspectProject(this.store, task, promptBudget, this.emit, () => this.cancelled);
@@ -43,27 +43,23 @@ class CodingAgent {
         }
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         if (reply.kind === 'done') {
-          if (requestsEdits(task, this.mode) && appliedFiles === 0 && !['no_changes', 'blocked'].includes(reply.outcome)) {
-            if (++prematureCompletions > 1) throw new Error('Copilot이 설명만 반환하고 실제 파일 수정안을 제출하지 않았습니다. 적용한 파일은 0개입니다. 수정 완료로 표시하지 않았습니다.');
-            history.push({ kind: 'execution_feedback', appliedFiles: 0, error: '사용자는 실제 파일 수정을 요청했습니다. changes로 수정안을 제출하세요. 수정 불필요 또는 불가능하면 done.outcome을 no_changes 또는 blocked로 명시하고 이유를 설명하세요.' });
-            this.emit({ type: 'status', text: '실제 변경이 없어 수정안을 다시 요청합니다…' });
-            continue;
-          }
-          if (reply.outcome === 'blocked' || reply.outcome === 'no_changes') this.emit({ type: 'message', role: 'system', text: '이번 요청에서 적용한 파일: ' + appliedFiles + '개' });
           this.emit({ type: 'message', role: 'assistant', text: reply.message });
-          return { status: 'done', message: reply.message };
+          this.emit({ type: 'message', role: 'system', text: `이번 요청에서 실제 적용한 파일: ${appliedFiles}개${appliedFiles === 0 ? ' · 파일 변경은 발생하지 않았습니다.' : ''}` });
+          return { status: 'done', message: reply.message, appliedFiles };
         }
         if (reply.kind === 'tools') {
           const observations = [];
-          for (const rawCall of reply.calls) {
+          const batchLimit = toolCallLimit(promptBudget);
+          for (const [index, rawCall] of reply.calls.entries()) {
             const call = normalizeToolCall(rawCall);
             if (this.cancelled) throw new Error('작업을 중지했습니다.');
+            if (index >= batchLimit) { observations.push({ call, error: `이번 요청의 도구 예산은 ${batchLimit}개입니다. 이 호출은 실행하지 않았습니다. 결과를 확인한 뒤 다음 요청에서 다시 호출하세요.` }); continue; }
             const toolId = newId();
             const label = `${call.name} · ${call.path || call.query || call.command || '프로젝트'}`;
             this.emit({ type: 'tool', id: toolId, label, state: 'running' });
             try {
               let result;
-              const resultBudget = Math.max(256, Math.min(6000, Math.floor((promptBudget - 2500) / reply.calls.length)));
+              const resultBudget = Math.max(256, Math.min(6000, Math.floor((promptBudget - 3500) / Math.min(batchLimit, reply.calls.length))));
               if (call.name === 'read_file') result = await this.store.readFile(call.path, { startLine: call.startLine, startColumn: call.startColumn, lineCount: call.lineCount, maxCharacters: resultBudget });
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit, call.path);
               else if (call.name === 'search_text') result = await this.store.search(call.query, call.paths);
