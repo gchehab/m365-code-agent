@@ -9,6 +9,7 @@ const { CodingAgent } = require('./agent');
 const { CommandRunner } = require('./terminal');
 const { requiresReview } = require('./policy');
 const { renderWebview } = require('./view');
+const { inspectProject } = require('./project');
 
 class AgentView {
   constructor(context) {
@@ -47,7 +48,7 @@ class AgentView {
     this.context.workspaceState.update('activeSession', this.sessionId);
   }
   state() {
-    return { type: 'history', events: this.events, running: this.starting || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData };
+    return { type: 'history', events: this.events, running: this.starting || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -65,11 +66,37 @@ class AgentView {
     if (!vscode.workspace.isTrusted) throw new Error('신뢰할 수 있는 프로젝트에서만 실행할 수 있습니다.');
     const folders = vscode.workspace.workspaceFolders || [];
     if (!folders.length) throw new Error('먼저 VS Code에서 작업할 폴더를 여세요.');
+    if (this.folder && !folders.some(folder => folder.uri.toString() === this.folder.uri.toString())) this.folder = null;
     const folder = this.folder || (folders.length === 1 ? folders[0] : await vscode.window.showQuickPick(folders.map(value => ({ label: value.name, value })), { placeHolder: '이번 작업의 프로젝트 폴더를 선택하세요.' }).then(pick => pick?.value));
     if (!folder) throw new Error('프로젝트 선택을 취소했습니다.');
     if (folder.uri.scheme !== 'file') throw new Error('이 버전은 같은 Windows PC의 로컬 프로젝트만 지원합니다.');
     this.folder = folder;
     return folder;
+  }
+  async workspaceStore(folder) {
+    return new WorkspaceStore(folder.uri.fsPath, async target => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'file' && document.uri.fsPath === target)?.getText(), { maxFileBytes: this.config().get('maxFileSizeMB', 16) * 1024 * 1024 }).initialize();
+  }
+  async checkWorkspace() {
+    if (this.starting || this.agent?.running) throw new Error('작업을 마친 뒤 프로젝트를 점검하세요.');
+    this.starting = true; this.stopRequested = false; this.post({ type: 'busy' });
+    let probe, handle;
+    try {
+      const folder = await this.rootFolder();
+      const store = await this.workspaceStore(folder);
+      const project = await inspectProject(store, '프로젝트 소스 분석', this.config().get('maxPromptCharacters'), event => this.post(event), () => this.stopRequested);
+      if (this.stopRequested) throw new Error('점검을 중지했습니다.');
+      const target = (await store.resolve('.m365-agent-check-' + crypto.randomUUID() + '.tmp', true)).target;
+      handle = await fs.open(target, 'wx'); probe = target;
+      await handle.writeFile('M365 Code Agent workspace access check', 'utf8');
+      await handle.close(); handle = null;
+      if (await fs.readFile(target, 'utf8') !== 'M365 Code Agent workspace access check') throw new Error('임시 파일 쓰기 검증에 실패했습니다.');
+      this.workspaceInfo = { name: folder.name, path: store.root, read: project.read, writable: true };
+      this.post({ type: 'workspace', ...this.workspaceInfo });
+      this.post({ type: 'message', role: 'system', text: `로컬 프로젝트 점검\n${store.root}\n파일 ${project.discovered}개 발견 · 본문 ${project.read}개 읽음\n임시 파일 쓰기·읽기 검증 성공. 임시 파일을 삭제합니다. M365 연결은 사용하지 않았습니다.` });
+    } finally {
+      try { await handle?.close(); if (probe) await fs.unlink(probe); }
+      finally { this.starting = false; this.post({ type: 'idle' }); }
+    }
   }
   async ensureBrowser() {
     if (!this.browser) {
@@ -152,10 +179,9 @@ class AgentView {
       const folder = await this.rootFolder();
       const browser = await this.ensureBrowser();
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-      const store = await new WorkspaceStore(folder.uri.fsPath, async target => {
-        const document = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'file' && document.uri.fsPath === target);
-        return document ? document.getText() : new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(target));
-      }).initialize();
+      const store = await this.workspaceStore(folder);
+      this.workspaceInfo = { name: folder.name, path: store.root };
+      this.post({ type: 'workspace', ...this.workspaceInfo });
       const contextFiles = [];
       const editor = vscode.window.activeTextEditor;
       if (message.includeEditor && editor && editor.document.uri.scheme === 'file') {
@@ -223,6 +249,7 @@ class AgentView {
     }
     const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, forcedReview, token: crypto.randomUUID() };
     if (review) {
+      this.post({ type: 'status', text: `파일 ${changes.length}개 변경 승인 대기 · diff를 확인하고 적용을 누르세요.` });
       const approved = await new Promise(resolve => { this.pending = { kind: 'changes', resolve, changes, viewData }; this.post(viewData); });
       this.pending = null;
       this.post({ type: 'reviewClosed' });
@@ -294,6 +321,7 @@ class AgentView {
   async handle(message) {
     if (!message || typeof message.type !== 'string') return;
     if (message.type === 'ready') { this.view.webview.postMessage(this.state()); return; }
+    if (message.type === 'checkWorkspace') return this.checkWorkspace();
     if (message.type === 'history') return this.showHistory();
     if (message.type === 'attach') return this.attachFiles();
     if (message.type === 'removeAttachment' && !this.starting) { this.attachments = this.attachments.filter(file => file !== message.path); this.view.webview.postMessage({ type: 'attachments', files: this.attachments }); return; }
@@ -332,6 +360,7 @@ function activate(context) {
   command('m365Agent.newChat', () => provider.newChat());
   command('m365Agent.stop', () => provider.stop());
   command('m365Agent.diagnostics', () => provider.diagnostics());
+  command('m365Agent.checkWorkspace', () => provider.checkWorkspace());
   context.subscriptions.push({ dispose: () => { provider.dispose().catch(() => {}); } });
   return { provider };
 }

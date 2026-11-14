@@ -8,12 +8,13 @@ const digest = text => crypto.createHash('sha256').update(text, 'utf8').digest('
 const blocked = /(^|\/)(\.git|node_modules|\.venv|venv|\.ssh|\.aws|\.azure|\.kube|\.m365-agent)(\/|$)|(^|\/)\.env[^/]*$|\.(pem|key|pfx|p12|jks|keystore)$|(^|\/)(\.npmrc|\.pypirc|\.netrc|\.yarnrc\.ya?ml|id_rsa|id_dsa|id_ecdsa|id_ed25519|credentials(?:\.(json|ini|toml|ya?ml))?|appsettings(?:\.[^/]*)?\.json)$|\.tfstate(?:\.[^/]*)?$|(^|\/)\.docker\/config\.json$/i;
 
 class WorkspaceStore {
-  constructor(root, readText) {
+  constructor(root, readText, { maxFileBytes = 16 * 1024 * 1024 } = {}) {
     this.root = path.resolve(root);
     this.readText = readText;
     this.ledger = new Map();
     this.editReads = new Map();
     this.ignores = ignore();
+    this.maxFileBytes = maxFileBytes;
   }
   async initialize() {
     this.root = await fs.realpath(this.root);
@@ -25,7 +26,7 @@ class WorkspaceStore {
   }
   normalize(input) {
     if (typeof input !== 'string' || !input || input.includes('\0') || path.win32.isAbsolute(input) || path.posix.isAbsolute(input)) throw new Error('프로젝트 상대 경로만 사용할 수 있습니다.');
-    const normalized = input.replace(/\\/g, '/');
+    const normalized = input.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
     if (normalized.split('/').some(part => !part || part === '.' || part === '..' || /[:<>"|?*]/.test(part) || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(part))) throw new Error('허용되지 않는 파일 경로입니다.');
     if (blocked.test(normalized) || this.ignores.ignores(normalized)) throw new Error(`제외된 경로입니다: ${normalized}`);
     return normalized;
@@ -49,13 +50,15 @@ class WorkspaceStore {
     }
     return { normalized, target };
   }
-  async listFiles(limit = 250) {
+  async listFiles(limit = 250, directory = '') {
+    if (directory === '.' || directory === './') directory = '';
     limit = Math.max(1, Math.min(Number(limit) || 250, 1000));
     const files = [];
     let truncated = false;
     const walk = async (directory, prefix = '') => {
       const entries = await fs.readdir(directory, { withFileTypes: true });
-      entries.sort((a, b) => a.name.localeCompare(b.name));
+      const priority = entry => entry.isDirectory() ? /^(src|app|lib|server|client)$/i.test(entry.name) ? 1 : 2 : 0;
+      entries.sort((a, b) => priority(a) - priority(b) || a.name.localeCompare(b.name));
       for (const entry of entries) {
         if (files.length >= limit) { truncated = true; return; }
         const relative = prefix + entry.name;
@@ -65,15 +68,25 @@ class WorkspaceStore {
         else if (entry.isFile()) files.push(relative);
       }
     };
-    await walk(this.root);
-    return { files, truncated };
+    let topTarget = this.root, topPrefix = '';
+    if (directory) {
+      const { normalized, target } = await this.resolve(directory);
+      if (!(await fs.stat(target)).isDirectory()) throw new Error('목록 경로는 디렉터리여야 합니다.');
+      topTarget = target; topPrefix = normalized + '/';
+      await walk(target, normalized + '/');
+    } else await walk(this.root);
+    const directories = (await fs.readdir(topTarget, { withFileTypes: true })).filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && !blocked.test(topPrefix + entry.name) && !this.ignores.ignores(topPrefix + entry.name + '/')).map(entry => topPrefix + entry.name);
+    return { files, truncated: truncated || directories.length > 100, directories: directories.slice(0, 100) };
   }
   async loadFile(input, diskOnly = false) {
     const { normalized, target } = await this.resolve(input);
     const stat = await fs.stat(target);
-    if (!stat.isFile() || stat.size > 128 * 1024) throw new Error('128KB 이하의 텍스트 파일만 읽을 수 있습니다.');
-    const content = this.readText && !diskOnly ? await this.readText(target) : new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(target));
-    if (content.includes('\0') || Buffer.byteLength(content, 'utf8') > 128 * 1024) throw new Error('바이너리 또는 너무 큰 파일입니다.');
+    if (!stat.isFile() || stat.size > this.maxFileBytes) throw new Error(`${Math.floor(this.maxFileBytes / 1024 / 1024)}MB 이하의 텍스트 파일만 읽을 수 있습니다. 더 큰 파일은 파일 크기 설정을 조정하세요.`);
+    const openText = this.readText && !diskOnly ? await this.readText(target) : undefined;
+    const buffer = typeof openText === 'string' ? null : await fs.readFile(target);
+    const encoding = buffer?.[0] === 0xff && buffer?.[1] === 0xfe ? 'utf-16le' : buffer?.[0] === 0xfe && buffer?.[1] === 0xff ? 'utf-16be' : 'utf-8';
+    const content = typeof openText === 'string' ? openText : new TextDecoder(encoding, { fatal: true }).decode(buffer);
+    if (content.includes('\0') || Buffer.byteLength(content, 'utf8') > this.maxFileBytes) throw new Error('바이너리 또는 너무 큰 파일입니다.');
     const hash = digest(content);
     return { path: normalized, hash, content };
   }
@@ -82,18 +95,23 @@ class WorkspaceStore {
     let result = file;
     if (options) {
       const lines = file.content.split('\n');
-      const start = options.startLine ?? 1, count = options.lineCount ?? 80;
+      const start = options.startLine ?? 1, count = options.lineCount ?? 80, column = options.startColumn ?? 1;
       const maxCharacters = options.maxCharacters ?? 8000;
-      if (!Number.isInteger(start) || start < 1 || start > lines.length || !Number.isInteger(count) || count < 1 || count > 200 || !Number.isInteger(maxCharacters) || maxCharacters < 128 || maxCharacters > 22000) throw new Error('줄 범위가 올바르지 않습니다. startLine>=1, lineCount=1~200.');
-      let content = '', end = start - 1;
+      if (!Number.isInteger(start) || start < 1 || start > lines.length || !Number.isInteger(column) || column < 1 || column > lines[start - 1].length + 1 || !Number.isInteger(count) || count < 1 || count > 200 || !Number.isInteger(maxCharacters) || maxCharacters < 128 || maxCharacters > 22000) throw new Error('줄 범위가 올바르지 않습니다. startLine/startColumn>=1, lineCount=1~200.');
+      let content = '', end = start - 1, nextLine = start, nextColumn = column;
       for (let index = start - 1; index < Math.min(lines.length, start - 1 + count); index++) {
-        const line = lines[index] + (index < lines.length - 1 ? '\n' : '');
-        if (content.length + line.length > maxCharacters) break;
+        const offset = index === start - 1 ? column - 1 : 0;
+        const line = lines[index].slice(offset) + (index < lines.length - 1 ? '\n' : '');
+        if (content.length + line.length > maxCharacters) {
+          if (!content.length) { content = line.slice(0, maxCharacters); if (/[\ud800-\udbff]$/.test(content) && /[\udc00-\udfff]/.test(line[content.length] || '')) content = content.slice(0, -1); end = index + 1; nextLine = index + 1; nextColumn = offset + content.length + 1; }
+          break;
+        }
         content += line;
         end = index + 1;
+        nextLine = index + 1 < lines.length ? index + 2 : null;
+        nextColumn = nextLine ? 1 : null;
       }
-      if (end < start) throw new Error('한 줄이 읽기 한도를 넘습니다. search_text로 필요한 부분을 검색하세요.');
-      result = { ...file, content, startLine: start, endLine: end, totalLines: lines.length, complete: start === 1 && end === lines.length, nextLine: end < lines.length ? end + 1 : null };
+      result = { ...file, content, startLine: start, startColumn: column, endLine: end, totalLines: lines.length, complete: start === 1 && column === 1 && nextLine === null, nextLine, nextColumn };
     }
     if (!options || result.complete) this.ledger.set(file.path, file.hash);
     let observed = this.editReads.get(file.path);
@@ -105,8 +123,20 @@ class WorkspaceStore {
   }
   async search(query, paths) {
     if (typeof query !== 'string' || !query || query.length > 200) throw new Error('검색어는 1~200자여야 합니다.');
-    const files = paths || (await this.listFiles(500)).files;
-    if (!Array.isArray(files) || files.length > 500) throw new Error('검색 파일 수는 최대 500개입니다.');
+    let files;
+    if (paths) {
+      const scopes = typeof paths === 'string' ? [paths] : paths;
+      if (!Array.isArray(scopes) || scopes.length > 500) throw new Error('검색 범위는 최대 500개입니다.');
+      const candidates = new Set();
+      for (const scope of scopes) {
+        if (scope === '.' || scope === './') { for (const file of (await this.listFiles(500)).files) candidates.add(file); continue; }
+        const resolved = await this.resolve(scope);
+        if ((await fs.stat(resolved.target)).isDirectory()) for (const file of (await this.listFiles(500, scope)).files) candidates.add(file);
+        else candidates.add(resolved.normalized);
+        if (candidates.size >= 500) break;
+      }
+      files = [...candidates].slice(0, 500);
+    } else files = (await this.listFiles(500)).files;
     const matches = [];
     for (const filename of files) {
       let file;
@@ -159,8 +189,8 @@ class WorkspaceStore {
         content = original.content;
         for (const span of spans.reverse()) content = content.slice(0, span.start) + span.text + content.slice(span.end);
       }
-      bytes += Buffer.byteLength(content, 'utf8');
-      if (bytes > 512 * 1024 || Buffer.byteLength(content, 'utf8') > 128 * 1024 || content.includes('\0')) throw new Error('변경 내용이 너무 크거나 텍스트가 아닙니다.');
+      bytes += Buffer.byteLength(file.action === 'edit' ? JSON.stringify(file.edits) : content, 'utf8');
+      if (bytes > 512 * 1024 || Buffer.byteLength(content, 'utf8') > this.maxFileBytes || content.includes('\0')) throw new Error('변경 내용이 너무 크거나 텍스트가 아닙니다.');
       changes.push({ ...file, content, path: normalized, target, original: original?.content ?? '', expectedHash: original?.hash ?? null });
     }
     return changes;

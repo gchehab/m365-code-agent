@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Inspect the workspace locally before the first model request: rank project/source files and send bounded real file reads automatically, without requiring attachments or an initial model tool call.
+- Add a browser-independent project check that reads source and creates/reads/deletes its own temporary file to verify local write access.
+- Raise the default text-file limit from 128KB to 16MB (configurable up to 128MB). Charge edit payload size rather than the complete resulting file against the batch budget.
+- Page within long lines using startColumn/nextColumn; support scoped directory listings/search and UTF-16 BOM source files.
+- Accept tool arguments in standard nested object/JSON-string wrappers while retaining path/hash protections.
+- Do not report requested edits complete when no file changes were applied. Show read counts, the selected project and explicit review-wait status.
+
 ## 0.3.1
 
 - Collect rendered JSON from tenant-specific code widgets, highlighted spans, open shadow roots and child frames, beyond pre/code tags.

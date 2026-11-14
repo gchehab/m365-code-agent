@@ -11,10 +11,12 @@ el('task').value = saved.draft || '';
 el('mode').value = saved.mode || 'agent';
 el('review').checked = saved.review !== false;
 el('includeEditor').checked = saved.includeEditor !== false;
-function persist() { api.setState({ draft: el('task').value, mode: el('mode').value, review: el('review').checked, includeEditor: el('includeEditor').checked }); }
+function modeHint() { el('modeHint').textContent = { agent: 'Agent · 프로젝트 읽기·수정·승인 후 명령 실행', ask: 'Ask · 읽기·설명 전용 — 실제 수정은 Agent로 전환', plan: 'Plan · 읽기·계획 전용 — 실제 수정은 Agent로 전환' }[el('mode').value]; }
+function persist() { modeHint(); api.setState({ draft: el('task').value, mode: el('mode').value, review: el('review').checked, includeEditor: el('includeEditor').checked }); }
+modeHint();
 function busy(value) {
   running = value;
-  for (const id of ['run', 'connect', 'newChat', 'history', 'attach', 'mode', 'undo', 'review', 'includeEditor']) el(id).disabled = value;
+  for (const id of ['run', 'connect', 'newChat', 'history', 'attach', 'mode', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
   el('stop').hidden = !value;
   el('run').hidden = value;
   el('status').classList.toggle('working', value);
@@ -61,7 +63,7 @@ el('task').addEventListener('keydown', event => {
   if (event.key === 'Escape' && running) send('stop');
 });
 for (const id of ['task', 'mode', 'review', 'includeEditor']) el(id).addEventListener('input', persist);
-for (const id of ['connect', 'newChat', 'history', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand']) el(id).addEventListener('click', () => {
+for (const id of ['connect', 'newChat', 'history', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand', 'checkWorkspace']) el(id).addEventListener('click', () => {
   if (['apply', 'reject'].includes(id)) closeReview();
   if (['approveCommand', 'rejectCommand'].includes(id)) el('approval').hidden = true;
   api.postMessage({ type: id, token: ['apply', 'reject'].includes(id) ? reviewToken : ['approveCommand', 'rejectCommand'].includes(id) ? commandToken : undefined });
@@ -79,7 +81,9 @@ window.addEventListener('message', ({ data }) => {
     data.events.forEach(message); busy(data.running); attachments(data.attachments || []);
     el('changes').hidden = true; el('approval').hidden = true; el('checkpoint').hidden = !data.undo;
     if (data.pending) window.dispatchEvent(new MessageEvent('message', { data: data.pending }));
+    if (data.workspace) window.dispatchEvent(new MessageEvent('message', { data: { type: 'workspace', ...data.workspace } }));
   }
+  if (data.type === 'workspace') { el('workspaceName').textContent = data.name; el('workspaceName').title = data.path; }
   if (data.type === 'attachments') attachments(data.files);
   if (data.type === 'changes') {
     reviewToken = data.token;

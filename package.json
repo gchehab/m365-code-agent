@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -70,6 +70,10 @@
       {
         "command": "m365Agent.diagnostics",
         "title": "M365 Agent: 연결 진단"
+      },
+      {
+        "command": "m365Agent.checkWorkspace",
+        "title": "M365 Agent: 프로젝트 읽기·쓰기 점검"
       }
     ],
     "viewsContainers": {
@@ -126,6 +130,7 @@
           "maximum": 120000,
           "description": "웹에 보낼 요청의 최대 글자 수. 입력창 한도가 더 작으면 전송 전에 문맥을 자동으로 줄입니다."
         },
+        "m365Agent.maxFileSizeMB": { "type": "number", "default": 16, "minimum": 1, "maximum": 128, "description": "로컬에서 읽고 부분 수정할 텍스트 파일의 최대 크기(MB). 웹에는 필요한 범위만 전달합니다." },
         "m365Agent.commandOutputEncoding": {
           "type": "string",
           "enum": [

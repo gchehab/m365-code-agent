@@ -137,7 +137,7 @@ test('command output and exit code return to the agent as tool observations', as
     } }
   });
   await agent.run('테스트해줘');
-  assert.equal(events.filter(event => event.type === 'tool').length, 2);
+  assert.equal(events.filter(event => event.type === 'tool' && event.label.startsWith('run_command')).length, 2);
 });
 
 test('command runner captures failures, bounds output and terminates timed-out jobs', async t => {
