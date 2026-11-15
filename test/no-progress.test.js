@@ -51,3 +51,28 @@ test('unchanged reads are identified as a continuation and repeated reads do not
   await assert.rejects(agent.run('Explain the project.'), { code: 'NO_PROGRESS' });
   assert.equal(requests, 3); assert.equal(taskIds.size, 1);
 });
+
+test('identical command outcomes stop repetition without caching or skipping actual executions', async t => {
+  const { store } = await fixture(t); let requests = 0, executed = 0;
+  const agent = new CodingAgent({ store, autoApprove: true, emit() {}, runCommand: async () => { executed++; return { exitCode: 0, output: 'ok' }; }, transport: { async request() { requests++; return { kind: 'tools', calls: [{ name: 'run_command', command: 'npm test' }] }; } } });
+  await assert.rejects(agent.run('Run the tests.'), { code: 'NO_PROGRESS' });
+  assert.equal(requests, 3); assert.equal(executed, 3);
+});
+
+test('the same test command is progress again after a verified source change', async t => {
+  const { root, store } = await fixture(t); const file = await store.readFile('main.js'); let requests = 0, executed = 0;
+  const agent = new CodingAgent({ store, emit() {}, runCommand: async () => { executed++; return { exitCode: 0, output: 'ok' }; }, approveAndApply: async changes => { await store.verifyChanges(changes); await fs.writeFile(changes[0].target, changes[0].content); return true; }, transport: { async request() {
+    requests++;
+    if (requests === 2) return { kind: 'changes', files: [{ path: 'main.js', action: 'replace', baseHash: file.hash, content: 'exports.value = 2;\n' }] };
+    if (requests < 4) return { kind: 'tools', calls: [{ name: 'run_command', command: 'npm test' }] };
+    return { kind: 'done', message: 'Tested before and after the edit.' };
+  } } });
+  assert.equal((await agent.run('Update and test the code.')).status, 'done');
+  assert.equal(executed, 2); assert.equal(await fs.readFile(path.join(root, 'main.js'), 'utf8'), 'exports.value = 2;\n');
+});
+
+test('identical file proposals cannot count as applied progress', async t => {
+  const { store } = await fixture(t); const file = await store.readFile('main.js'); let applied = 0;
+  const agent = new CodingAgent({ store, emit() {}, approveAndApply: async () => { applied++; return true; }, transport: { async request() { return { kind: 'changes', files: [{ path: 'main.js', action: 'replace', baseHash: file.hash, content: file.content }] }; } } });
+  await assert.rejects(agent.run('Update the code.'), { code: 'NO_PROGRESS' }); assert.equal(applied, 0);
+});

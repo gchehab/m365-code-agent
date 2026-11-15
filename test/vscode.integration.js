@@ -139,6 +139,34 @@ async function run() {
   await provider.undo();
   await assert.rejects(fs.access(path.join(root, 'package.json')));
 
+  // Explicit automatic approval applies execution settings and runs a real command,
+  // without a change/command approval prompt; it must not leak into the next request.
+  const automaticEvents = [], originalPost = provider.post;
+  provider.post = function (event) { automaticEvents.push(event); return originalPost.call(this, event); };
+  let automaticRound = 0;
+  provider.browser.request = async prompt => {
+    assert.equal(provider.pending, null);
+    assert.match(prompt, /commands run without approval prompts/);
+    if (++automaticRound === 1) return { kind: 'changes', summary: '자동 승인 검증용 코드 및 실행 설정', files: [
+      { path: 'package.json', action: 'create', baseHash: null, content: '{"scripts":{"test":"node src/automatic.js"}}\n' },
+      { path: 'src/automatic.js', action: 'create', baseHash: null, content: "require('node:fs').writeFileSync('automatic-result.txt', 'ok');\n" }
+    ] };
+    if (automaticRound === 2) return { kind: 'tools', calls: [{ name: 'run_command', command: 'node src/automatic.js' }] };
+    return { kind: 'done', message: '자동 승인으로 수정하고 검증했습니다.' };
+  };
+  try { await Promise.race([provider.start({ task: 'package.json과 샘플 코드를 만들고 검증 명령을 실행해줘.', review: true, autoApprove: true, includeEditor: false }), new Promise((_resolve, reject) => setTimeout(() => reject(new Error('automatic approval waited for a prompt')), 20000))]); }
+  finally { provider.post = originalPost; }
+  assert.equal(await fs.readFile(path.join(root, 'automatic-result.txt'), 'utf8'), 'ok');
+  assert.equal(automaticEvents.some(event => event.type === 'commandApproval' || (event.type === 'changes' && event.review)), false);
+  assert.ok(automaticEvents.some(event => event.type === 'changes' && event.autoApproved));
+  assert.equal(provider.pending, null);
+  const subsequentManual = provider.runCommand('echo manual-approval-required', root);
+  assert.equal(provider.pending.kind, 'command');
+  await provider.handle({ type: 'rejectCommand', token: provider.pending.viewData.token });
+  assert.equal((await subsequentManual).approved, false);
+  await provider.undo();
+  await assert.rejects(fs.access(path.join(root, 'package.json')));
+
   // A large file is edited using a bounded read and an exact replacement anchor.
   const large = Array.from({ length: 1000 }, (_, i) => `const row${i} = "${'x'.repeat(60)}";`).join('\n');
   await fs.writeFile(path.join(root, 'src', 'large.js'), large);
@@ -164,7 +192,7 @@ async function run() {
   const store = await new (require('../src/workspace').WorkspaceStore)(root, async () => current).initialize();
   const file = await store.readFile('src/average.js');
   const changes = await store.prepareChanges([{ path: file.path, action: 'replace', baseHash: file.hash, content: 'bad overwrite' }]);
-  await assert.rejects(provider.stageAndApply(store, changes, 'must reject', false), /저장하지 않은/);
+  await assert.rejects(provider.stageAndApply(store, changes, 'must reject', true, true), /저장하지 않은/);
   assert.equal(document.getText(), current);
   await document.save();
   const { chromium } = require(path.join(extension.extensionPath, 'node_modules', 'playwright-core'));
@@ -220,7 +248,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

@@ -7,29 +7,29 @@ const { requiresReview } = require('./policy');
 
 class ChangeController {
   constructor(host, vscode) { this.host = host; this.vscode = vscode; }
-  async runCommand(command, root) {
+  async runCommand(command, root, autoApprove = false) {
     const host = this.host;
     if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command)) throw new Error('명령 형식이 올바르지 않습니다.');
     if (host.stopRequested) throw new Error('작업을 중지했습니다.');
-    const approved = await new Promise(resolve => {
+    const approved = autoApprove === true || await new Promise(resolve => {
       const changedFiles = [...host.changedFiles.values()].filter(file => path.resolve(file.root).toLowerCase() === path.resolve(root).toLowerCase()).map(file => ({ path: file.path, id: host.previews.has(file.id + '-new') ? file.id : null, sensitive: requiresReview(file.path), currentTask: file.taskId === host.taskId }));
       const viewData = { type: 'commandApproval', command, root, changedFiles, token: crypto.randomUUID() };
       host.pending = { kind: 'command', resolve, viewData };
       host.post(viewData);
     });
-    host.pending = null;
-    host.post({ type: 'approvalClosed' });
+    if (autoApprove !== true) { host.pending = null; host.post({ type: 'approvalClosed' }); }
     if (!approved || host.stopRequested) return { approved: false, message: '사용자가 실행을 거절했습니다. 다시 요청하지 마세요.' };
+    if (autoApprove === true) host.post({ type: 'message', role: 'system', text: `승인 없이 진행 · 명령 실행\n${command}\n작업 폴더: ${root}` });
     host.output.appendLine(`\n> ${command}\n${root}`);
     host.output.show(true);
     host.runner.encoding = host.config().get('commandOutputEncoding', 'utf8');
     return host.runner.run(command, root, text => host.output.append(text));
   }
-  async stageAndApply(store, changes, summary, review) {
+  async stageAndApply(store, changes, summary, review, autoApprove = false) {
     const host = this.host;
     const vscode = this.vscode;
-    const forcedReview = changes.filter(change => requiresReview(change.path)).map(change => change.path);
-    review = review || forcedReview.length > 0;
+    const forcedReview = autoApprove === true ? [] : changes.filter(change => requiresReview(change.path)).map(change => change.path);
+    review = autoApprove !== true && (review || forcedReview.length > 0);
     for (const change of changes) {
       const id = crypto.randomUUID();
       change.previewId = id;
@@ -37,15 +37,15 @@ class ChangeController {
       host.previews.set(id + '-new', change.content);
       if (host.previews.size > 200) host.previews.delete(host.previews.keys().next().value);
     }
-    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, forcedReview, token: crypto.randomUUID() };
+    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, autoApproved: autoApprove === true, forcedReview, token: crypto.randomUUID() };
     if (review) {
       host.post({ type: 'status', text: `파일 ${changes.length}개 변경 승인 대기 · diff를 확인하고 적용을 누르세요.` });
       const approved = await new Promise(resolve => { host.pending = { kind: 'changes', resolve, changes, viewData }; host.post(viewData); });
       host.pending = null;
       host.post({ type: 'reviewClosed' });
-      if (!approved || host.agent?.cancelled) return false;
+      if (!approved || host.stopRequested || host.agent?.cancelled) return false;
     } else host.post(viewData);
-    if (host.agent?.cancelled) return false;
+    if (host.stopRequested || host.agent?.cancelled) return false;
     await store.verifyChanges(changes);
     const edit = new vscode.WorkspaceEdit();
     const documents = [];
@@ -64,7 +64,7 @@ class ChangeController {
       documents.push(uri);
     }
     await store.verifyChanges(changes);
-    if (host.agent?.cancelled) return false;
+    if (host.stopRequested || host.agent?.cancelled) return false;
     if (!await vscode.workspace.applyEdit(edit, { isRefactoring: false })) throw new Error('VS Code가 변경 적용을 거부했습니다. 편집기에서 파일 상태를 확인하세요.');
     host.checkpoints.push({ store, changes });
     for (const change of changes) { change.taskId = host.taskId; host.changedFiles.set(store.root.toLowerCase() + '\0' + change.path.toLowerCase(), { root: store.root, path: change.path, id: change.previewId, taskId: host.taskId }); }
@@ -78,7 +78,7 @@ class ChangeController {
       changes[index].diskHash = await fs.readFile(uri.fsPath, 'utf8').then(digest).catch(() => null);
     }
     if (failed.length) throw new Error(`편집기에 적용했지만 저장하지 못한 파일이 있습니다: ${failed.join(', ')}. 직접 확인하세요.`);
-    host.post({ type: 'message', role: 'system', text: `${changes.length}개 파일을 적용하고 저장했습니다. 테스트는 실행하지 않았습니다.` });
+    host.post({ type: 'message', role: 'system', text: `${autoApprove === true ? '승인 없이 진행 · ' : ''}${changes.length}개 파일을 적용하고 저장했습니다. 테스트는 실행하지 않았습니다.` });
     host.post({ type: 'applied' });
     return true;
   }

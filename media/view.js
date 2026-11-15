@@ -28,20 +28,27 @@ el('composerOptions').open = saved.composerOptions === true;
 el('composerOptions').addEventListener('toggle', persist);
 el('task').value = saved.draft || '';
 el('review').checked = saved.review !== false;
+el('autoApprove').checked = saved.autoApprove === true;
 el('includeEditor').checked = saved.includeEditor !== false;
-function syncPreferences() { el('approvalMode').textContent = el('review').checked ? '승인 켜짐' : '자동 적용'; el('approvalMode').classList.toggle('auto-apply', !el('review').checked); }
+function syncPreferences() {
+  const automatic = el('autoApprove').checked;
+  el('approvalMode').textContent = automatic ? '승인 없이 진행' : el('review').checked ? '승인 켜짐' : '일반 파일 자동 적용';
+  el('approvalMode').classList.toggle('auto-apply', automatic || !el('review').checked);
+  el('review').disabled = running || automatic;
+  el('form').classList.toggle('auto-approval', automatic);
+}
 syncPreferences();
-function persist() { syncPreferences(); api.setState({ draft: el('task').value, pendingTask, review: el('review').checked, includeEditor: el('includeEditor').checked, readingSize, wrapCode: el('wrapCode').checked, composerOptions: el('composerOptions').open }); }
+function persist() { syncPreferences(); api.setState({ draft: el('task').value, pendingTask, review: el('review').checked, autoApprove: el('autoApprove').checked, includeEditor: el('includeEditor').checked, readingSize, wrapCode: el('wrapCode').checked, composerOptions: el('composerOptions').open }); }
 function busy(value) {
   running = value;
   if (!value) progress(null);
-  for (const id of ['run', 'connect', 'newChat', 'history', 'more', 'attach', 'model', 'refreshModels', 'syncWeb', 'showBrowser', 'editorBrowser', 'diagnostics', 'undo', 'review', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
+  for (const id of ['run', 'connect', 'newChat', 'history', 'more', 'attach', 'model', 'refreshModels', 'syncWeb', 'showBrowser', 'editorBrowser', 'diagnostics', 'undo', 'review', 'autoApprove', 'includeEditor', 'checkWorkspace']) el(id).disabled = value;
   for (const control of el('historyPanel').querySelectorAll('button,input')) control.disabled = value;
   el('deleteAllSessions').disabled = value || !sessions.length;
   if (value) toggleMore(false);
   el('stop').hidden = !value;
   el('run').hidden = value;
-  el('status').classList.toggle('working', value);
+  el('status').classList.toggle('working', value); syncPreferences();
 }
 function followEnd(force = false) {
   if (renderingHistory) return;
@@ -122,7 +129,7 @@ el('form').addEventListener('submit', event => {
   followEnd(true);
   busy(true); el('status').textContent = '작업 준비 중…'; el('status').classList.remove('error'); el('changes').hidden = true;
   pendingTask = { id: crypto.randomUUID(), task };
-  api.postMessage({ type: 'run', task, clientRequestId: pendingTask.id, review: el('review').checked, includeEditor: el('includeEditor').checked });
+  api.postMessage({ type: 'run', task, clientRequestId: pendingTask.id, review: el('review').checked, autoApprove: el('autoApprove').checked, includeEditor: el('includeEditor').checked });
   el('task').value = ''; resizeComposer(); persist();
 });
 el('task').addEventListener('compositionstart', () => { composing = true; });
@@ -133,7 +140,7 @@ el('task').addEventListener('keydown', event => {
 });
 function resizeComposer() { el('task').style.height = 'auto'; el('task').style.height = Math.min(160, Math.max(52, el('task').scrollHeight)) + 'px'; }
 el('task').addEventListener('input', resizeComposer); resizeComposer();
-for (const id of ['task', 'review', 'includeEditor']) el(id).addEventListener('input', persist);
+for (const id of ['task', 'review', 'autoApprove', 'includeEditor']) el(id).addEventListener('input', persist);
 for (const id of ['connect', 'newChat', 'attach', 'diagnostics', 'stop', 'apply', 'reject', 'undo', 'approveCommand', 'rejectCommand', 'checkWorkspace', 'refreshModels', 'syncWeb', 'showBrowser', 'editorBrowser']) el(id).addEventListener('click', () => {
   toggleMore(false);
   if (id === 'newChat') showHistory(false);
@@ -190,7 +197,7 @@ function models(choices, selected) {
 }
 function progress(value) {
   el('roundProgress').hidden = !value;
-  el('roundProgress').textContent = value ? `Copilot 요청 ${value.round}/${value.total} · 이후 ${value.remaining}회` : '';
+  el('roundProgress').textContent = value ? `Copilot 요청 ${value.round}회 · 안전 한도 ${value.total}회` : '';
 }
 window.addEventListener('message', ({ data }) => {
   if (data.type === 'message' || data.type === 'tool') message(data);
@@ -233,7 +240,7 @@ window.addEventListener('message', ({ data }) => {
   if (data.type === 'attachments') attachments(data.files);
   if (data.type === 'changes') {
     reviewToken = data.token;
-    el('reviewReason').textContent = data.forcedReview?.length ? '실행 설정·스크립트 변경은 자동 적용 설정과 관계없이 검토가 필요합니다.' : '';
+    el('reviewReason').textContent = data.autoApproved ? '승인 없이 진행 · 검증 후 자동 적용합니다.' : data.forcedReview?.length ? '실행 설정·스크립트 변경은 자동 적용 설정과 관계없이 검토가 필요합니다.' : '';
     el('changes').hidden = false; el('changeTitle').textContent = data.summary; el('changeFiles').replaceChildren();
     for (const file of data.files) {
       const button = document.createElement('button'); button.className = 'file'; button.textContent = `${file.action === 'create' ? '+' : 'M'}  ${file.path}`; button.title = 'VS Code에서 diff 열기';

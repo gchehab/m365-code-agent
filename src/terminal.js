@@ -7,7 +7,7 @@ function outputDecoder(encoding = 'utf8') {
   return { write: chunk => decoder.decode(chunk, { stream: true }), end: () => decoder.decode() };
 }
 
-// The caller must obtain approval for the exact command before invoking this runner.
+// The caller must obtain approval or an explicit user-selected automatic-approval policy.
 class CommandRunner {
   async run(command, cwd, onOutput = () => {}, timeoutMs = 120000) {
     if (this.child) throw new Error('이미 명령이 실행 중입니다.');

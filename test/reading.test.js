@@ -108,3 +108,29 @@ test('response panel reuses one read-only editor and routes clipboard acknowledg
   reader.show({ text: '<script>unsafe()</script>' }); assert.ok(!panel.webview.html.includes('<script>unsafe()'));
   reader.dispose(); assert.equal(reader.text, ''); assert.equal(reader.panel, null);
 });
+
+test('automatic approval is off by default, visible when selected, and snapshotted into each submitted task', async t => {
+  const { page, host } = await fixture(t, renderWebview(options));
+  assert.equal(await page.locator('#autoApprove').isChecked(), false);
+  await page.locator('#task').fill('첫 요청'); await page.locator('#task').press('Enter');
+  assert.equal((await page.evaluate(() => window.sent.filter(item => item.type === 'run').at(-1))).autoApprove, false);
+  await host({ type: 'idle' });
+  await page.locator('#composerOptions > summary').click();
+  await page.locator('#autoApprove').check();
+  assert.equal(await page.locator('#review').isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.saved.autoApprove), true);
+  await page.screenshot({ path: path.join(root, '.test-output', 'automatic-approval-ui.png') });
+  await page.locator('#composerOptions > summary').click();
+  assert.equal(await page.locator('#approvalMode').isVisible(), true);
+  assert.equal(await page.locator('#approvalMode').textContent(), '승인 없이 진행');
+  await page.locator('#task').fill('샘플을 수정하고 테스트해줘.'); await page.locator('#task').press('Enter');
+  assert.equal((await page.evaluate(() => window.sent.filter(item => item.type === 'run').at(-1))).autoApprove, true);
+  assert.equal(await page.locator('#autoApprove').isDisabled(), true);
+  await host({ type: 'idle' });
+  assert.equal(await page.locator('#review').isDisabled(), true);
+  await page.locator('#composerOptions > summary').click(); await page.locator('#autoApprove').uncheck();
+  assert.equal(await page.locator('#review').isDisabled(), false);
+  assert.equal(await page.locator('#review').isChecked(), true);
+  assert.equal(await page.evaluate(() => window.saved.autoApprove), false);
+  for (const width of [280, 360]) { await page.setViewportSize({ width, height: 720 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); }
+});

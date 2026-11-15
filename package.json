@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read and edit a VS Code workspace.",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -129,9 +129,11 @@
         },
         "m365Agent.maxRounds": {
           "type": "number",
-          "default": 20,
+          "default": 100,
           "minimum": 1,
-          "maximum": 30
+          "maximum": 500,
+          "multipleOf": 1,
+          "description": "작업당 Copilot 요청의 안전 한도. 기본 100회, 최대 500회입니다. 새 결과 없이 같은 읽기·실패·명령 결과가 반복되면 한도 전에 중지합니다. 직접 지정한 값은 유지합니다."
         },
         "m365Agent.responseTimeoutSeconds": {
           "type": "number",

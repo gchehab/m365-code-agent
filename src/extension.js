@@ -234,6 +234,7 @@ class AgentView {
       }
       if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
       const { task, mode, intent } = resolveTask(message.task);
+      const autoApprove = message.autoApprove === true;
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.saveSession();
       if (browser.waitForComposer && browser.context) {
@@ -246,10 +247,10 @@ class AgentView {
       }
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
-        mode, intent, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
+        mode, intent, autoApprove, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
         maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
-        runCommand: command => this.runCommand(command, folder.uri.fsPath),
-        approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review)) });
+        runCommand: command => this.runCommand(command, folder.uri.fsPath, autoApprove),
+        approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review), autoApprove) });
       await this.agent.run(task, JSON.stringify(contextFiles));
     } catch (error) { errorMessage = error.message; this.post({ type: 'message', role: 'system', text: error.message }); }
     finally {
@@ -259,8 +260,8 @@ class AgentView {
       this.post({ type: 'status', text: errorMessage || '완료 · 다음 요청을 이어서 입력하세요.', error: Boolean(errorMessage) });
     }
   }
-  async runCommand(command, root) { return this.changes.runCommand(command, root); }
-  async stageAndApply(store, changes, summary, review) { return this.changes.stageAndApply(store, changes, summary, review); }
+  async runCommand(command, root, autoApprove = false) { return this.changes.runCommand(command, root, autoApprove === true); }
+  async stageAndApply(store, changes, summary, review, autoApprove = false) { return this.changes.stageAndApply(store, changes, summary, review, autoApprove === true); }
   async undo() { return this.changes.undo(); }
   async handle(message) {
     if (!message || typeof message.type !== 'string') return;

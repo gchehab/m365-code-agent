@@ -94,3 +94,7 @@ summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-of
 
 #approvalMode { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); }
 #approvalMode.auto-apply { color: var(--vscode-editorWarning-foreground,var(--vscode-errorForeground)); }
+
+.auto-approve-option { display: flex; align-items: center; gap: 5px; font-size: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border); }
+.option-note { color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.5; margin: 5px 0; }
+#form.auto-approval { border-color: var(--vscode-editorWarning-foreground,var(--vscode-focusBorder)); }

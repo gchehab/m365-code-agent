@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0
+
+- Raise the default per-task request safety ceiling to 100 (configurable up to 500); retain explicitly configured limits and stop unchanged work before the ceiling.
+- Detect repeated identical command outcomes without caching executions. A source change permits the same test command to count as new evidence. Reject identical-content proposals instead of reporting them as applied progress.
+- Add an explicit, default-off **승인 없이 진행** option covering file changes, execution settings and terminal commands. Capture the policy per submitted task, show it even when options are collapsed, and lock it while running.
+- Preserve path/secret/read/hash/dirty-file protections, read-only tasks, stop, diffs and file undo. Model replies cannot grant automatic approval. Normal change/command reviews remain the default.
+- Record automatic file/command approvals and verify real execution-setting writes and terminal commands without prompts, followed by normal approval on the next request.
+
 ## 0.8.1
 
 - Place chat in the Secondary Side Bar by default, with a minimum supported VS Code version of 1.106.

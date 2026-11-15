@@ -4,8 +4,8 @@ const { inspectProject } = require('./project');
 const { TaskProgress } = require('./task-progress');
 
 class CodingAgent {
-  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', intent, maxRounds = 20, maxPromptCharacters = 12000 }) {
-    Object.assign(this, { store, transport, approveAndApply, runCommand, emit, conversation, mode, intent, maxRounds, maxPromptCharacters });
+  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', intent, autoApprove = false, maxRounds = 100, maxPromptCharacters = 12000 }) {
+    Object.assign(this, { store, transport, approveAndApply, runCommand, emit, conversation, mode, intent, autoApprove: autoApprove === true, maxRounds: Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100, maxPromptCharacters });
     this.cancelled = false;
     this.running = false;
   }
@@ -30,11 +30,11 @@ class CodingAgent {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         const id = newId();
         this.emit({ type: 'progress', round, total: this.maxRounds, remaining: this.maxRounds - round });
-        this.emit({ type: 'status', text: `진행 ${round}/${this.maxRounds} · 이후 ${this.maxRounds - round}회 · Copilot 요청 준비` });
+        this.emit({ type: 'status', text: `요청 ${round}회 · 안전 한도 ${this.maxRounds}회 · Copilot 요청 준비` });
         let reply;
         for (let attempt = 0; attempt < 3; attempt++) {
           const prompt = buildPrompt({ id, task, workspace: require('node:path').basename(this.store.root), files,
-            history, extraContext, mode: this.mode, intent: this.intent, progress: progress.snapshot(round, this.maxRounds, appliedFiles), maxCharacters: promptBudget });
+            history, extraContext, mode: this.mode, intent: this.intent, autoApprove: this.autoApprove, progress: progress.snapshot(round, this.maxRounds, appliedFiles), maxCharacters: promptBudget });
           try {
             reply = await this.transport.request(prompt, id, text => this.emit({ type: 'status', text }));
             break;
@@ -96,10 +96,11 @@ class CodingAgent {
           let fresh = false;
           try {
             if (this.mode !== 'agent') throw new Error('이번 요청은 분석·계획이므로 파일을 수정하지 않습니다. 설명 또는 계획으로 답변하세요.');
-            const changes = await this.store.prepareChanges(reply.files);
+            const changes = (await this.store.prepareChanges(reply.files)).filter(change => change.action === 'create' || change.content !== change.original);
+            if (!changes.length) { const error = new Error('수정안이 현재 파일과 동일합니다. 새 변경 없이 완료한 파일을 다시 적용하지 마세요.'); error.code = 'UNCHANGED_CHANGES'; throw error; }
             this.emit({ type: 'message', role: 'assistant', text: reply.summary || '파일 수정안을 준비했습니다.' });
             const applied = await this.approveAndApply(changes, reply.summary || '파일 수정안');
-            if (applied) { appliedFiles += changes.length; fresh = true; progress.lastError = undefined; for (const change of changes) progress.changedFiles.add(change.path); }
+            if (applied) { appliedFiles += changes.length; fresh = true; progress.lastError = undefined; progress.recordChanges(changes); }
             if (this.cancelled) throw new Error('작업을 중지했습니다.');
             history.push({ kind: 'change_result', applied, files: changes.map(change => change.path), tests: 'not_run' });
             if (!applied) return { status: 'rejected' };
@@ -128,7 +129,7 @@ class CodingAgent {
           progress.finishRound(fresh, history, appliedFiles);
         }
       }
-      throw new Error('최대 요청 횟수에 도달했습니다. 작업 범위를 줄여 다시 요청하세요.');
+      throw new Error(`안전 한도 ${this.maxRounds}회에 도달해 중지했습니다. 실제 적용한 파일: ${appliedFiles}개. 적용 내역은 유지됩니다. 필요한 작업을 이어서 요청하거나 m365Agent.maxRounds를 조정하세요.`);
     } finally { this.running = false; this.emit({ type: 'idle' }); }
   }
 }
