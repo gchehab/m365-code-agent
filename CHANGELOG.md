@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- Place chat in the Secondary Side Bar by default, with a minimum supported VS Code version of 1.106.
+- Make M365 Agent: Open on the Right restore only the agent view and container to their defaults, recovering saved pre-upgrade/custom locations. Honor the user's placement of the Secondary Side Bar itself.
+- Verify default placement and recovery from a moved view in actual VS Code.
+
 ## 0.8.0
 
 - Improve response typography, heading hierarchy, paragraph spacing, inline emphasis and narrow-sidebar layouts.

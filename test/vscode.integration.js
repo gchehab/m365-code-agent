@@ -9,9 +9,16 @@ async function run() {
   const extension = vscode.extensions.getExtension('jhoon-dev.m365-code-agent');
   assert.ok(extension, 'extension is loaded');
   const { provider } = await extension.activate();
-  await vscode.commands.executeCommand('m365Agent.chat.focus');
+  assert.ok(extension.packageJSON.contributes.viewsContainers.secondarySidebar.some(container => container.id === 'm365Agent'));
+  assert.equal(extension.packageJSON.contributes.viewsContainers.activitybar, undefined);
+  assert.ok((await vscode.commands.getCommands(true)).includes('workbench.view.extension.m365Agent.resetViewContainerLocation'));
+  await Promise.race([vscode.commands.executeCommand('m365Agent.open'), new Promise((_resolve, reject) => setTimeout(() => reject(new Error('agent open timed out')), 20000))]);
   for (let tries = 0; !provider.view && tries < 100; tries++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(provider.view, 'sidebar webview is created');
+  // Simulate a saved old/custom placement, then restore just the agent via its open command.
+  await vscode.commands.executeCommand('vscode.moveViews', { viewIds: ['m365Agent.chat'], destinationId: 'workbench.view.explorer' });
+  await Promise.race([vscode.commands.executeCommand('m365Agent.open'), new Promise((_resolve, reject) => setTimeout(() => reject(new Error('agent open timed out')), 20000))]);
+  assert.equal(provider.view.visible, true, 'chat reopens after restoring its secondary-sidebar location');
   assert.match(provider.view.webview.html, /Content-Security-Policy/);
   await provider.handle({ type: 'openResponse', text: '## Readable response\n\n```js\nconst value = 1;\n```', readingSize: 16, wrapCode: true });
   assert.equal(provider.responsePanel.panel.viewType, 'm365Agent.response');
@@ -213,7 +220,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

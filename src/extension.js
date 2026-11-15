@@ -318,7 +318,12 @@ function activate(context) {
     provideTextDocumentContent: uri => provider.previews.get(uri.path.slice(1)) || ''
   }));
   const command = (name, fn) => context.subscriptions.push(vscode.commands.registerCommand(name, () => Promise.resolve(fn()).catch(error => vscode.window.showErrorMessage(error.message))));
-  command('m365Agent.open', () => vscode.commands.executeCommand('m365Agent.chat.focus'));
+  command('m365Agent.open', async () => {
+    // Restore only this extension's view/container, including saved pre-upgrade placements.
+    await vscode.commands.executeCommand('m365Agent.chat.resetViewLocation');
+    await vscode.commands.executeCommand('workbench.view.extension.m365Agent.resetViewContainerLocation');
+    return vscode.commands.executeCommand('m365Agent.chat.focus');
+  });
   command('m365Agent.connect', () => provider.connect());
   command('m365Agent.showBrowser', () => provider.showBrowser());
   command('m365Agent.editorBrowser', () => provider.switchBrowserView('editor'));
