@@ -13,6 +13,13 @@ async function run() {
   for (let tries = 0; !provider.view && tries < 100; tries++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(provider.view, 'sidebar webview is created');
   assert.match(provider.view.webview.html, /Content-Security-Policy/);
+  await provider.handle({ type: 'openResponse', text: '## Readable response\n\n```js\nconst value = 1;\n```', readingSize: 16, wrapCode: true });
+  assert.equal(provider.responsePanel.panel.viewType, 'm365Agent.response');
+  assert.match(provider.responsePanel.panel.webview.html, /language-js/);
+  const responsePanel = provider.responsePanel.panel;
+  await provider.handle({ type: 'openResponse', text: 'Second answer' });
+  assert.equal(provider.responsePanel.panel, responsePanel, 'reader reuses the editor tab');
+  provider.responsePanel.dispose();
   const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   const original = 'exports.average = values => values.reduce((a,b)=>a+b,0)/values.length;\n';
@@ -206,7 +213,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

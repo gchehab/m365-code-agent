@@ -68,7 +68,7 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await host(decorate({ type: 'message', role: 'assistant', text: '## 변경 결과\n\n빈 배열에는 null을 반환하도록 수정합니다.\n```js\naverage([]) === null\n```\n\n| 파일 | 결과 |\n| --- | --- |\n| average.js | 완료 |' }));
   assert.equal(await page.locator('.markdown h2').textContent(), '변경 결과');
   assert.equal(await page.locator('.markdown table').count(), 1);
-  await page.locator('.code-toolbar button').click();
+  await page.locator('.code-toolbar .copy-button').click();
   assert.match((await page.evaluate(() => window.sent.find(message => message.type === 'copyCode'))).text, /average\(\[\]\)/);
   await host({ type: 'changes', summary: '빈 배열 처리 및 회귀 테스트', files: [{ id: 'preview-1', path: 'src/average.js', action: 'replace' }], review: true, forcedReview: ['package.json'], token: 'review-123' });
   assert.match(await page.locator('#reviewReason').textContent(), /자동 적용/);
@@ -83,6 +83,7 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await host({ type: 'idle' });
   assert.equal(await page.locator('#roundProgress').isVisible(), false);
   await host({ type: 'models', choices: [{ id: 'real-id', label: '계정에서 읽은 모델' }], selected: '' });
+  await page.locator('#composerOptions > summary').click();
   await page.locator('#model').selectOption('real-id');
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'selectModel'))).id, 'real-id');
   await host({ type: 'status', text: '전송을 확인하지 못했습니다.', error: true });
@@ -98,7 +99,7 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
 
   await page.getByRole('button', { name: '더 보기', exact: true }).click();
   assert.equal(await page.getByRole('menu').isVisible(), true);
-  await page.getByRole('menuitem', { name: '웹 대화 동기화' }).focus();
+  await page.getByRole('menuitem', { name: '프로젝트 점검' }).focus();
   await page.keyboard.press('ArrowDown');
   assert.equal(await page.getByRole('menuitem', { name: '연결 진단' }).evaluate(element => element === document.activeElement), true);
   await page.getByRole('menuitem', { name: '연결 진단' }).click();

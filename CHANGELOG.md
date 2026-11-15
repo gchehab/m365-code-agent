@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+- Improve response typography, heading hierarchy, paragraph spacing, inline emphasis and narrow-sidebar layouts.
+- Group consecutive tool/system events into collapsible activity cards; automatically reveal tool failures while retaining separate change and command approvals.
+- Preserve the reading position during new events and same-conversation web synchronization. Add a latest-response jump button and preserve expanded activity/code-wrap choices across refreshes.
+- Add per-code wrapping, clipboard acknowledgement, whole-response Markdown copying and a reusable read-only editor tab for wider answers.
+- Add persisted 12–18px reading size and wrapping preferences. Compact the composer and fold model/context/approval settings while keeping approval mode visible.
+- Verify reading controls, activity grouping, synchronization scrolling, dark/light rendering, narrow layouts and the response panel in real VS Code.
+
 ## 0.7.0
 
 - Display the actual automation browser in a VS Code editor panel by default, with live frames, mouse/keyboard/IME input, tab selection, navigation and an external-browser fallback. Keep the existing dedicated Edge profile; no iframe, localhost server, cookie extraction or security-header overrides.

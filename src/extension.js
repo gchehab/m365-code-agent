@@ -18,6 +18,7 @@ const { ConversationController } = require('./conversations');
 const { ModelController } = require('./models');
 const { ChangeController } = require('./changes');
 const { BrowserPanel } = require('./browser-panel');
+const { ResponsePanel } = require('./response-panel');
 
 class AgentView {
   constructor(context) {
@@ -26,6 +27,7 @@ class AgentView {
     this.models = new ModelController(this);
     this.changes = new ChangeController(this, vscode);
     this.browserPanel = new BrowserPanel(this, vscode);
+    this.responsePanel = new ResponsePanel(this, vscode);
     this.sessions = context.workspaceState.get('sessions', []);
     this.sessionId = context.workspaceState.get('activeSession');
     this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
@@ -61,7 +63,7 @@ class AgentView {
   }
   saveSession() { return this.conversations.saveSession(); }
   state() {
-    return { type: 'history', events: this.events.map(decorate), running: this.starting || this.switchingBrowser || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress, sessions: this.conversations.summaries() };
+    return { type: 'history', sessionId: this.sessionId, events: this.events.map(decorate), running: this.starting || this.switchingBrowser || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress, sessions: this.conversations.summaries() };
   }
   resolveWebviewView(view) {
     this.view = view;
@@ -268,7 +270,8 @@ class AgentView {
     if (message.type === 'syncWeb') return this.syncWeb();
     if (message.type === 'refreshModels') return this.refreshModels();
     if (message.type === 'selectModel') return this.chooseModel(message.id);
-    if (message.type === 'copyCode' && typeof message.text === 'string' && message.text.length <= 1024 * 1024) return vscode.env.clipboard.writeText(message.text);
+    if (message.type === 'copyCode') return this.copyText(message, this.view?.webview);
+    if (message.type === 'openResponse') return this.responsePanel.show(message);
     if (message.type === 'openLink' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) return vscode.env.openExternal(vscode.Uri.parse(message.url));
     if (message.type === 'checkWorkspace') return this.checkWorkspace();
     if (message.type === 'history') return this.showHistory();
@@ -299,7 +302,13 @@ class AgentView {
       return vscode.commands.executeCommand('vscode.diff', makeUri('-old'), makeUri('-new'), 'M365 Agent · 변경 미리보기');
     }
   }
-  async dispose() { clearInterval(this.syncTimer); this.browserPanel.dispose(); await this.stop(); await this.currentRun?.catch(() => {}); if (this.browser) await this.browser.close(); this.output.dispose(); }
+  async copyText(message, target) {
+    if (typeof message.text !== 'string' || message.text.length > 1024 * 1024) return;
+    let success = false;
+    try { await vscode.env.clipboard.writeText(message.text); success = true; } catch { /* Reply to the originating view without losing the conversation. */ }
+    target?.postMessage({ type: 'copyResult', id: message.id, success });
+  }
+  async dispose() { clearInterval(this.syncTimer); this.responsePanel.dispose(); this.browserPanel.dispose(); await this.stop(); await this.currentRun?.catch(() => {}); if (this.browser) await this.browser.close(); this.output.dispose(); }
 }
 
 function activate(context) {
