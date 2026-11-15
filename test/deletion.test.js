@@ -50,7 +50,8 @@ test('file_info and delete retain exclusions, root bounds, symlink protection, d
   const store = await new WorkspaceStore(root).initialize();
   for (const name of ['..', '../outside', 'C:/outside', '.env', 'ignored/file', 'NUL', '.']) await assert.rejects(store.fileInfo(name));
   await assert.rejects(store.fileInfo('ignored'), /제외|파일/);
-  await fs.mkdir(path.join(root, 'folder')); assert.equal((await store.fileInfo('folder')).kind, 'directory');
+  await fs.mkdir(path.join(root, 'folder')); await assert.rejects(store.fileInfo('folder'), /folder_info/);
+  assert.equal(store.directoryReads.has('folder'), false);
   const outside = await directory(t, 'delete-outside-'); await fs.writeFile(path.join(outside, 'keep.txt'), 'keep');
   await fs.symlink(outside, path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(store.fileInfo('escape/keep.txt'), /링크|정션/);

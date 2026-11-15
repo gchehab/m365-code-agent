@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0
+
+- Make file_info strictly file-only. Folder deletion requires explicit folder_info evidence; host-driven proposal recovery selects and records the matching file/folder tool.
+- Validate tool argument field types at the untrusted model boundary. Add JSDoc checking for workspace validation and tool-call normalization, discriminated change/snapshot contracts and negative compile-time fixtures.
+- Add pinned Prettier/TypeScript development tools and CI checks. Format runtime modules/scripts, split the protocol prompt and browser HTML into readable sections, and retain byte-identical prompt output across 18 variants.
+- Add a dry-run-first test-output cleanup command with retention, completed-run ownership checks, process/age protection, path bounds and link rejection. Mark integration-run lifecycle without touching Copilot sign-in profiles.
+- Use an in-memory fixture for the 100+ round policy unit test; retain real filesystem, Edge and VS Code integration coverage.
+
 ## 0.12.2
 
 - Restore the unchanged dependency lock entries after a release-version edit incorrectly altered the retry dependency. Only the extension root version changes; clean dependency installation is verified in CI. Runtime functionality is the same as 0.12.1.

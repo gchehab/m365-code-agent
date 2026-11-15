@@ -14,8 +14,13 @@ async function fixture(t) {
   return new WorkspaceStore(root).initialize();
 }
 
-test('unlimited progressing tasks pass 100 rounds without changing the finite ceiling or approval policy', async t => {
-  const store = await fixture(t), events = []; let requests = 0;
+test('unlimited progressing tasks pass 100 rounds without changing the finite ceiling or approval policy', async () => {
+  // This test measures loop/approval policy. Real disk reads and paging have their
+  // own workspace tests; avoid 110 repeated filesystem traversals in this unit test.
+  const store = { root: 'memory-project', async listFiles() { return { files: ['main.js'], truncated: false }; }, async readFile(name, { startLine = 1 } = {}) {
+    return { path: name, hash: 'fixed-memory-source', content: `const value${startLine} = ${startLine};`, startLine, endLine: startLine, nextLine: startLine + 1, nextColumn: 1, totalLines: 130, complete: false };
+  } };
+  const events = []; let requests = 0;
   const agent = new CodingAgent({ store, unlimitedRounds: true, maxRounds: 2, emit: event => events.push(event), transport: { async request(prompt) {
     requests++; const data = JSON.parse(prompt.split('DATA: ')[1]);
     assert.equal(data.progress.unlimited, true); assert.equal(data.progress.limit, null); assert.equal(data.progress.round, requests);

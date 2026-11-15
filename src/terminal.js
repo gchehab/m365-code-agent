@@ -4,33 +4,51 @@ const { TextDecoder } = require('node:util');
 
 function outputDecoder(encoding = 'utf8') {
   const decoder = new TextDecoder(encoding === 'cp949' ? 'euc-kr' : 'utf-8');
-  return { write: chunk => decoder.decode(chunk, { stream: true }), end: () => decoder.decode() };
+  return { write: (chunk) => decoder.decode(chunk, { stream: true }), end: () => decoder.decode() };
 }
 
 // The caller must obtain approval or an explicit user-selected automatic-approval policy.
 class CommandRunner {
   async run(command, cwd, onOutput = () => {}, timeoutMs = 120000) {
     if (this.child) throw new Error('이미 명령이 실행 중입니다.');
-    if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command)) throw new Error('명령은 1~2,000자의 한 줄로 입력해야 합니다.');
+    if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command))
+      throw new Error('명령은 1~2,000자의 한 줄로 입력해야 합니다.');
     return new Promise((resolve, reject) => {
-      let output = '', truncated = false, timedOut = false, cancelled = false, finished = false;
+      let output = '',
+        truncated = false,
+        timedOut = false,
+        cancelled = false,
+        finished = false;
       const encoding = this.encoding || 'utf8';
-      const shellCommand = process.platform === 'win32' ? `chcp ${encoding === 'cp949' ? '949' : '65001'}>nul && ${command}` : command;
-      const child = spawn(shellCommand, { cwd, shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const shellCommand =
+        process.platform === 'win32'
+          ? `chcp ${encoding === 'cp949' ? '949' : '65001'}>nul && ${command}`
+          : command;
+      const child = spawn(shellCommand, {
+        cwd,
+        shell: true,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       this.child = child;
-      const stdout = outputDecoder(encoding), stderr = outputDecoder(encoding);
-      const append = text => {
+      const stdout = outputDecoder(encoding),
+        stderr = outputDecoder(encoding);
+      const append = (text) => {
         if (!text) return;
         onOutput(text);
         output += text;
-        if (output.length > 12000) { output = output.slice(-12000); truncated = true; }
+        if (output.length > 12000) {
+          output = output.slice(-12000);
+          truncated = true;
+        }
       };
-      child.stdout.on('data', data => append(stdout.write(data)));
-      child.stderr.on('data', data => append(stderr.write(data)));
+      child.stdout.on('data', (data) => append(stdout.write(data)));
+      child.stderr.on('data', (data) => append(stderr.write(data)));
       const finish = (error, code) => {
         if (finished) return;
         finished = true;
-        append(stdout.end()); append(stderr.end());
+        append(stdout.end());
+        append(stderr.end());
         clearTimeout(timer);
         this.child = null;
         this.cancel = null;
@@ -39,14 +57,20 @@ class CommandRunner {
       };
       this.cancel = () => {
         cancelled = true;
-        if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+        if (process.platform === 'win32')
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
         else child.kill('SIGTERM');
       };
-      const timer = setTimeout(() => { timedOut = true; this.cancel?.(); }, timeoutMs);
-      child.on('error', error => finish(error));
-      child.on('close', code => finish(null, code));
+      const timer = setTimeout(() => {
+        timedOut = true;
+        this.cancel?.();
+      }, timeoutMs);
+      child.on('error', (error) => finish(error));
+      child.on('close', (code) => finish(null, code));
     });
   }
-  stop() { this.cancel?.(); }
+  stop() {
+    this.cancel?.();
+  }
 }
 module.exports = { CommandRunner, outputDecoder };

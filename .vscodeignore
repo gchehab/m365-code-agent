@@ -11,3 +11,8 @@ node_modules/.cache/**
 package-lock.json
 *.zip
 *.log
+
+types/**
+tsconfig.json
+prettier.config.cjs
+.gitattributes

@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { WorkspaceStore } = require('../src/workspace');
 const { ChangeController } = require('../src/changes');
+const { CodingAgent } = require('../src/agent');
 const output = path.resolve(__dirname, '..', '.test-output');
 async function fixture(t) {
   await fs.mkdir(output, { recursive: true });
@@ -46,6 +47,20 @@ test('folder inspection stops during scanning without granting a deletion hash',
   const { store } = await fixture(t); let probes = 0;
   await assert.rejects(store.folderInfo('old', () => ++probes > 2), /중지/);
   assert.equal(store.directoryReads.has('old'), false);
+});
+
+test('folder deletion recovery explicitly records folder_info while file_info remains file-only', async t => {
+  const { store } = await fixture(t); let requests = 0;
+  await assert.rejects(store.fileInfo('old'), /folder_info/);
+  assert.equal(store.directoryReads.has('old'), false);
+  const agent = new CodingAgent({ store, emit() {}, approveAndApply: async changes => { assert.equal(changes[0].directory, true); return false; }, transport: { async request(prompt) {
+    if (++requests === 1) return { kind: 'changes', files: [{ path: 'old', action: 'delete', baseHash: 'missing-evidence' }] };
+    const data = JSON.parse(prompt.split('DATA: ')[1]);
+    const evidence = data.history.find(item => item.origin === 'proposal_validation_repair').observations[0];
+    assert.equal(evidence.call.name, 'folder_info'); assert.equal(evidence.result.kind, 'directory');
+    return { kind: 'changes', files: [{ path: evidence.result.path, action: 'delete', baseHash: evidence.result.hash }] };
+  } } });
+  assert.equal((await agent.run('Delete the old folder.')).status, 'rejected'); assert.equal(requests, 2);
 });
 
 test('model-supplied directory metadata cannot turn an ordinary file change into a folder operation', async t => {

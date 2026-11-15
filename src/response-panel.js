@@ -7,27 +7,59 @@ function renderResponse({ text, nonce, cspSource, resource }) {
 }
 
 class ResponsePanel {
-  constructor(host, vscode) { this.host = host; this.vscode = vscode; }
+  constructor(host, vscode) {
+    this.host = host;
+    this.vscode = vscode;
+  }
   show(message) {
     if (typeof message.text !== 'string' || !message.text.trim() || message.text.length > 1024 * 1024) return;
     const vscode = this.vscode;
     if (!this.panel) {
-      const panel = vscode.window.createWebviewPanel('m365Agent.response', 'M365 Copilot · 답변', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.host.context.extensionUri, 'media')] });
+      const panel = vscode.window.createWebviewPanel(
+        'm365Agent.response',
+        'M365 Copilot · 답변',
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          localResourceRoots: [vscode.Uri.joinPath(this.host.context.extensionUri, 'media')],
+        },
+      );
       this.panel = panel;
-      panel.onDidDispose(() => { if (this.panel === panel) { this.panel = null; this.text = ''; } });
-      panel.webview.onDidReceiveMessage(value => {
+      panel.onDidDispose(() => {
+        if (this.panel === panel) {
+          this.panel = null;
+          this.text = '';
+        }
+      });
+      panel.webview.onDidReceiveMessage((value) => {
         if (this.panel !== panel || !value) return;
         if (value.type === 'ready') panel.webview.postMessage({ type: 'readingSettings', ...this.settings });
         if (value.type === 'copyResponse') this.host.copyText({ ...value, text: this.text }, panel.webview);
         if (value.type === 'copyCode') this.host.copyText(value, panel.webview);
-        if (value.type === 'openLink' && typeof value.url === 'string' && /^https?:\/\//i.test(value.url)) vscode.env.openExternal(vscode.Uri.parse(value.url));
+        if (value.type === 'openLink' && typeof value.url === 'string' && /^https?:\/\//i.test(value.url))
+          vscode.env.openExternal(vscode.Uri.parse(value.url));
       });
     } else this.panel.reveal();
     this.text = message.text;
-    this.settings = { readingSize: Number.isFinite(message.readingSize) ? Math.min(18, Math.max(12, message.readingSize)) : 14, wrapCode: message.wrapCode !== false };
-    const resource = name => this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.host.context.extensionUri, 'media', name));
-    this.panel.webview.html = renderResponse({ text: this.text, nonce: randomBytes(18).toString('base64'), cspSource: this.panel.webview.cspSource, resource });
+    this.settings = {
+      readingSize: Number.isFinite(message.readingSize)
+        ? Math.min(18, Math.max(12, message.readingSize))
+        : 14,
+      wrapCode: message.wrapCode !== false,
+    };
+    const resource = (name) =>
+      this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.host.context.extensionUri, 'media', name));
+    this.panel.webview.html = renderResponse({
+      text: this.text,
+      nonce: randomBytes(18).toString('base64'),
+      cspSource: this.panel.webview.cspSource,
+      resource,
+    });
   }
-  dispose() { this.panel?.dispose(); this.panel = null; this.text = ''; }
+  dispose() {
+    this.panel?.dispose();
+    this.panel = null;
+    this.text = '';
+  }
 }
 module.exports = { ResponsePanel, renderResponse };

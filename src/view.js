@@ -1,6 +1,13 @@
 'use strict';
 function icon(name) {
-  const shapes = { add: '<path d="M12 5v14M5 12h14"/>', history: '<path d="M3 11a9 9 0 1 1 2.6 7.3M3 4v7h7M12 7v5l3 2"/>', more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', close: '<path d="m6 6 12 12M18 6 6 18"/>', sync: '<path d="M20 7h-5m5 0V2M4 17h5m-5 0v5M4 8a8 8 0 0 1 13-5l3 4M4 17l3 4a8 8 0 0 0 13-5"/>', info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/>' };
+  const shapes = {
+    add: '<path d="M12 5v14M5 12h14"/>',
+    history: '<path d="M3 11a9 9 0 1 1 2.6 7.3M3 4v7h7M12 7v5l3 2"/>',
+    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+    close: '<path d="m6 6 12 12M18 6 6 18"/>',
+    sync: '<path d="M20 7h-5m5 0V2M4 17h5m-5 0v5M4 8a8 8 0 0 1 13-5l3 4M4 17l3 4a8 8 0 0 0 13-5"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/>',
+  };
   return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${shapes[name]}</svg>`;
 }
 function renderWebview({ nonce, cspSource, resource }) {

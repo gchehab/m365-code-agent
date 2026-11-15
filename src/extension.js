@@ -30,9 +30,9 @@ class AgentView {
     this.responsePanel = new ResponsePanel(this, vscode);
     this.sessions = context.workspaceState.get('sessions', []);
     this.sessionId = context.workspaceState.get('activeSession');
-    this.events = this.sessions.find(session => session.id === this.sessionId)?.events || [];
-    this.webUrl = this.sessions.find(session => session.id === this.sessionId)?.webUrl;
-    this.newWebChat = this.sessions.find(session => session.id === this.sessionId)?.newWebChat || false;
+    this.events = this.sessions.find((session) => session.id === this.sessionId)?.events || [];
+    this.webUrl = this.sessions.find((session) => session.id === this.sessionId)?.webUrl;
+    this.newWebChat = this.sessions.find((session) => session.id === this.sessionId)?.newWebChat || false;
     this.modelChoices = [];
     this.attachments = [];
     this.checkpoints = [];
@@ -45,14 +45,19 @@ class AgentView {
     this.previews = new Map();
     this.output = vscode.window.createOutputChannel('M365 Code Agent');
     this.config = () => vscode.workspace.getConfiguration('m365Agent');
-    this.syncTimer = setInterval(() => { this.syncWeb(false).catch(() => {}); }, 5000);
+    this.syncTimer = setInterval(() => {
+      this.syncWeb(false).catch(() => {});
+    }, 5000);
     this.syncTimer.unref();
   }
   post(event) {
     if (event.type === 'progress') this.progress = event;
     if (event.type === 'idle') this.progress = null;
     if (['message', 'tool'].includes(event.type)) {
-      const existing = event.type === 'tool' ? this.events.findIndex(item => item.type === 'tool' && item.id === event.id) : -1;
+      const existing =
+        event.type === 'tool'
+          ? this.events.findIndex((item) => item.type === 'tool' && item.id === event.id)
+          : -1;
       if (existing >= 0) this.events[existing] = event;
       else this.events.push(event);
       this.events = this.events.slice(-100);
@@ -61,56 +66,120 @@ class AgentView {
     this.view?.webview.postMessage(decorate(event));
     if (event.type === 'status') this.output.appendLine(event.text);
   }
-  saveSession() { return this.conversations.saveSession(); }
+  saveSession() {
+    return this.conversations.saveSession();
+  }
   state() {
-    return { type: 'history', sessionId: this.sessionId, events: this.events.map(decorate), running: this.starting || this.switchingBrowser || this.sessionSwitching || Boolean(this.agent?.running), attachments: this.attachments, undo: this.checkpoints.length > 0, pending: this.pending?.viewData, workspace: this.workspaceInfo, webUrl: this.webUrl, models: this.modelChoices, selectedModel: this.selectedModel, progress: this.progress, sessions: this.conversations.summaries() };
+    return {
+      type: 'history',
+      sessionId: this.sessionId,
+      events: this.events.map(decorate),
+      running:
+        this.starting || this.switchingBrowser || this.sessionSwitching || Boolean(this.agent?.running),
+      attachments: this.attachments,
+      undo: this.checkpoints.length > 0,
+      pending: this.pending?.viewData,
+      workspace: this.workspaceInfo,
+      webUrl: this.webUrl,
+      models: this.modelChoices,
+      selectedModel: this.selectedModel,
+      progress: this.progress,
+      sessions: this.conversations.summaries(),
+    };
   }
   resolveWebviewView(view) {
     this.view = view;
-    view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')] };
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
+    };
     const nonce = crypto.randomBytes(18).toString('base64');
-    const resource = name => view.webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', name));
+    const resource = (name) =>
+      view.webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', name));
     view.webview.html = renderWebview({ nonce, cspSource: view.webview.cspSource, resource });
-    view.webview.onDidReceiveMessage(message => this.handle(message).catch(error => {
-      this.post({ type: 'message', role: 'system', text: error.message });
-      if (!this.starting && !this.agent?.running) this.post({ type: 'idle' });
-      this.post({ type: 'status', text: error.message, error: true });
-    }), undefined, this.context.subscriptions);
+    view.webview.onDidReceiveMessage(
+      (message) =>
+        this.handle(message).catch((error) => {
+          this.post({ type: 'message', role: 'system', text: error.message });
+          if (!this.starting && !this.agent?.running) this.post({ type: 'idle' });
+          this.post({ type: 'status', text: error.message, error: true });
+        }),
+      undefined,
+      this.context.subscriptions,
+    );
   }
   async rootFolder() {
     if (!vscode.workspace.isTrusted) throw new Error('신뢰할 수 있는 프로젝트에서만 실행할 수 있습니다.');
     const folders = vscode.workspace.workspaceFolders || [];
     if (!folders.length) throw new Error('먼저 VS Code에서 작업할 폴더를 여세요.');
-    if (this.folder && !folders.some(folder => folder.uri.toString() === this.folder.uri.toString())) this.folder = null;
-    const folder = this.folder || (folders.length === 1 ? folders[0] : await vscode.window.showQuickPick(folders.map(value => ({ label: value.name, value })), { placeHolder: '이번 작업의 프로젝트 폴더를 선택하세요.' }).then(pick => pick?.value));
+    if (this.folder && !folders.some((folder) => folder.uri.toString() === this.folder.uri.toString()))
+      this.folder = null;
+    const folder =
+      this.folder ||
+      (folders.length === 1
+        ? folders[0]
+        : await vscode.window
+            .showQuickPick(
+              folders.map((value) => ({ label: value.name, value })),
+              { placeHolder: '이번 작업의 프로젝트 폴더를 선택하세요.' },
+            )
+            .then((pick) => pick?.value));
     if (!folder) throw new Error('프로젝트 선택을 취소했습니다.');
-    if (folder.uri.scheme !== 'file') throw new Error('이 버전은 같은 Windows PC의 로컬 프로젝트만 지원합니다.');
+    if (folder.uri.scheme !== 'file')
+      throw new Error('이 버전은 같은 Windows PC의 로컬 프로젝트만 지원합니다.');
     this.folder = folder;
     return folder;
   }
   async workspaceStore(folder) {
-    return new WorkspaceStore(folder.uri.fsPath, async target => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'file' && document.uri.fsPath === target)?.getText(), { maxFileBytes: this.config().get('maxFileSizeMB', 16) * 1024 * 1024 }).initialize();
+    return new WorkspaceStore(
+      folder.uri.fsPath,
+      async (target) =>
+        vscode.workspace.textDocuments
+          .find((document) => document.uri.scheme === 'file' && document.uri.fsPath === target)
+          ?.getText(),
+      { maxFileBytes: this.config().get('maxFileSizeMB', 16) * 1024 * 1024 },
+    ).initialize();
   }
   async checkWorkspace() {
     if (this.starting || this.agent?.running) throw new Error('작업을 마친 뒤 프로젝트를 점검하세요.');
-    this.starting = true; this.stopRequested = false; this.post({ type: 'busy' });
+    this.starting = true;
+    this.stopRequested = false;
+    this.post({ type: 'busy' });
     let probe, handle;
     try {
       const folder = await this.rootFolder();
       const store = await this.workspaceStore(folder);
-      const project = await inspectProject(store, '프로젝트 소스 분석', this.config().get('maxPromptCharacters'), event => this.post(event), () => this.stopRequested);
+      const project = await inspectProject(
+        store,
+        '프로젝트 소스 분석',
+        this.config().get('maxPromptCharacters'),
+        (event) => this.post(event),
+        () => this.stopRequested,
+      );
       if (this.stopRequested) throw new Error('점검을 중지했습니다.');
       const target = (await store.resolve('.m365-agent-check-' + crypto.randomUUID() + '.tmp', true)).target;
-      handle = await fs.open(target, 'wx'); probe = target;
+      handle = await fs.open(target, 'wx');
+      probe = target;
       await handle.writeFile('M365 Code Agent workspace access check', 'utf8');
-      await handle.close(); handle = null;
-      if (await fs.readFile(target, 'utf8') !== 'M365 Code Agent workspace access check') throw new Error('임시 파일 쓰기 검증에 실패했습니다.');
+      await handle.close();
+      handle = null;
+      if ((await fs.readFile(target, 'utf8')) !== 'M365 Code Agent workspace access check')
+        throw new Error('임시 파일 쓰기 검증에 실패했습니다.');
       this.workspaceInfo = { name: folder.name, path: store.root, read: project.read, writable: true };
       this.post({ type: 'workspace', ...this.workspaceInfo });
-      this.post({ type: 'message', role: 'system', text: `로컬 프로젝트 점검\n${store.root}\n파일 ${project.discovered}개 발견 · 본문 ${project.read}개 읽음\n임시 파일 쓰기·읽기 검증 성공. 임시 파일을 삭제합니다. M365 연결은 사용하지 않았습니다.` });
+      this.post({
+        type: 'message',
+        role: 'system',
+        text: `로컬 프로젝트 점검\n${store.root}\n파일 ${project.discovered}개 발견 · 본문 ${project.read}개 읽음\n임시 파일 쓰기·읽기 검증 성공. 임시 파일을 삭제합니다. M365 연결은 사용하지 않았습니다.`,
+      });
     } finally {
-      try { await handle?.close(); if (probe) await fs.unlink(probe); }
-      finally { this.starting = false; this.post({ type: 'idle' }); }
+      try {
+        await handle?.close();
+        if (probe) await fs.unlink(probe);
+      } finally {
+        this.starting = false;
+        this.post({ type: 'idle' });
+      }
     }
   }
   async ensureBrowser() {
@@ -119,18 +188,34 @@ class AgentView {
       const profile = path.join(this.context.globalStorageUri.fsPath, 'edge-profile');
       await fs.mkdir(profile, { recursive: true });
       this.browser = new CopilotBrowser({
-        profile, url: config.get('copilotUrl'), channel: config.get('browserChannel'),
+        profile,
+        url: config.get('copilotUrl'),
+        channel: config.get('browserChannel'),
         embedded: (this.browserViewOverride || config.get('browserView', 'editor')) === 'editor',
-        composerSelector: config.get('composerSelector'), sendButtonSelector: config.get('sendButtonSelector'),
-        responseSelector: config.get('responseSelector'), timeoutSeconds: config.get('responseTimeoutSeconds'), loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600), modelButtonSelector: config.get('modelButtonSelector'), onConversation: info => { if (info.restorable) { this.webUrl = info.url; this.saveSession(); this.post({ type: 'webConversation', url: info.url }); } }
+        composerSelector: config.get('composerSelector'),
+        sendButtonSelector: config.get('sendButtonSelector'),
+        responseSelector: config.get('responseSelector'),
+        timeoutSeconds: config.get('responseTimeoutSeconds'),
+        loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600),
+        modelButtonSelector: config.get('modelButtonSelector'),
+        onConversation: (info) => {
+          if (info.restorable) {
+            this.webUrl = info.url;
+            this.saveSession();
+            this.post({ type: 'webConversation', url: info.url });
+          }
+        },
       });
     }
     try {
-      if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor') this.browserPanel.show();
+      if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor')
+        this.browserPanel.show();
       await this.browser.connect();
-    }
-    catch (error) {
-      throw new Error(`M365 연결 실패: ${error.message}\nPC에 Edge가 설치되어 있고 회사 정책에서 브라우저 자동화가 허용되는지 확인하세요.`, { cause: error });
+    } catch (error) {
+      throw new Error(
+        `M365 연결 실패: ${error.message}\nPC에 Edge가 설치되어 있고 회사 정책에서 브라우저 자동화가 허용되는지 확인하세요.`,
+        { cause: error },
+      );
     }
     return this.browser;
   }
@@ -138,12 +223,17 @@ class AgentView {
     if (this.switchingBrowser) throw new Error('브라우저 전환이 끝난 뒤 다시 연결하세요.');
     await this.ensureBrowser();
     const result = await this.browser.diagnostics();
-    this.post({ type: 'message', role: 'system', text: `Copilot 브라우저 연결: ${result.title}\n${result.url}\n브라우저 화면에서 회사 계정 로그인 후 작업을 시작하세요.` });
+    this.post({
+      type: 'message',
+      role: 'system',
+      text: `Copilot 브라우저 연결: ${result.title}\n${result.url}\n브라우저 화면에서 회사 계정 로그인 후 작업을 시작하세요.`,
+    });
   }
   async showBrowser() {
     if (this.switchingBrowser) return;
     const browser = await this.ensureBrowser();
-    if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor') this.browserPanel.show(false);
+    if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor')
+      this.browserPanel.show(false);
     else await browser.page.bringToFront();
   }
   async switchBrowserView(mode) {
@@ -151,26 +241,52 @@ class AgentView {
     this.switchingBrowser = true;
     this.post({ type: 'busy' });
     try {
-      await this.stop(); await this.currentRun?.catch(() => {});
-      this.browserPanel.dispose(); await this.browser?.close(); this.browser = null;
-      this.browserViewOverride = mode; await this.ensureBrowser();
-      this.post({ type: 'status', text: mode === 'editor' ? 'VS Code 브라우저에 연결했습니다.' : '외부 브라우저로 전환했습니다. 중지된 요청은 입력창에서 다시 보낼 수 있습니다.' });
-    } finally { this.switchingBrowser = false; this.post({ type: 'idle' }); }
+      await this.stop();
+      await this.currentRun?.catch(() => {});
+      this.browserPanel.dispose();
+      await this.browser?.close();
+      this.browser = null;
+      this.browserViewOverride = mode;
+      await this.ensureBrowser();
+      this.post({
+        type: 'status',
+        text:
+          mode === 'editor'
+            ? 'VS Code 브라우저에 연결했습니다.'
+            : '외부 브라우저로 전환했습니다. 중지된 요청은 입력창에서 다시 보낼 수 있습니다.',
+      });
+    } finally {
+      this.switchingBrowser = false;
+      this.post({ type: 'idle' });
+    }
   }
-  async newChat() { return this.conversations.newChat(); }
-  async showHistory() { return this.conversations.showHistory(); }
-  async syncWeb(manual = true) { return this.conversations.syncWeb(manual); }
-  async refreshModels() { return this.models.refreshModels(); }
-  async chooseModel(id) { return this.models.chooseModel(id); }
+  async newChat() {
+    return this.conversations.newChat();
+  }
+  async showHistory() {
+    return this.conversations.showHistory();
+  }
+  async syncWeb(manual = true) {
+    return this.conversations.syncWeb(manual);
+  }
+  async refreshModels() {
+    return this.models.refreshModels();
+  }
+  async chooseModel(id) {
+    return this.models.chooseModel(id);
+  }
   async attachFiles() {
     if (this.starting || this.agent?.running) return;
     const folder = await this.rootFolder();
     const store = await new WorkspaceStore(folder.uri.fsPath).initialize();
     const listing = await store.listFiles(1000);
-    const picks = await vscode.window.showQuickPick(listing.files.map(label => ({ label, picked: this.attachments.includes(label) })), { canPickMany: true, placeHolder: '첨부할 파일 선택 (최대 5개)' });
+    const picks = await vscode.window.showQuickPick(
+      listing.files.map((label) => ({ label, picked: this.attachments.includes(label) })),
+      { canPickMany: true, placeHolder: '첨부할 파일 선택 (최대 5개)' },
+    );
     if (!picks) return;
     if (picks.length > 5) throw new Error('파일은 최대 5개까지 첨부할 수 있습니다.');
-    this.attachments = picks.map(pick => pick.label);
+    this.attachments = picks.map((pick) => pick.label);
     this.view?.webview.postMessage({ type: 'attachments', files: this.attachments });
   }
   async diagnostics() {
@@ -178,29 +294,55 @@ class AgentView {
     const data = await browser.diagnostics();
     this.output.appendLine(JSON.stringify(data, null, 2));
     this.output.show();
-    this.post({ type: 'message', role: 'system', text: `연결 진단\n주소: ${data.url}\n입력창: ${data.composer}\n페이지 프레임: ${data.frames}\n최근 전송: ${data.lastSend?.stage || '없음'}${data.lastSend ? `\n입력: 요청 ${data.lastSend.characters}자 / 확인 ${data.lastSend.observedCharacters ?? '?'}자 / 한도 ${data.lastSend.maxLength ?? '미표시'}` : ''}` });
+    this.post({
+      type: 'message',
+      role: 'system',
+      text: `연결 진단\n주소: ${data.url}\n입력창: ${data.composer}\n페이지 프레임: ${data.frames}\n최근 전송: ${data.lastSend?.stage || '없음'}${data.lastSend ? `\n입력: 요청 ${data.lastSend.characters}자 / 확인 ${data.lastSend.observedCharacters ?? '?'}자 / 한도 ${data.lastSend.maxLength ?? '미표시'}` : ''}`,
+    });
     if (data.lastResponse) {
       const response = data.lastResponse;
-      const stage = { 'not-submitted': '전송 전', waiting: '응답 영역 대기', 'json-incomplete': '요청 ID 발견·JSON 수집 중', 'json-conflict': '여러 JSON 충돌 확인 중', 'json-confirmed': 'JSON 확인·생성 종료 대기', complete: '수집 완료' }[response.stage] || response.stage;
-      this.post({ type: 'message', role: 'system', text: `응답 수집 진단\n단계: ${stage}\n응답 후보: ${response.candidates || 0}개 / 현재 요청 ID: ${response.matchingRequestId || 0}개\nJSON: ${response.parsed ? '확인됨' : '미확인'} / 생성 상태: ${response.generating ? '진행 중' : '종료 또는 미감지'}\n수집 경로: ${response.sources?.join(', ') || '없음'}${response.parseError ? '\n해석 상태: ' + response.parseError : ''}` });
+      const stage =
+        {
+          'not-submitted': '전송 전',
+          waiting: '응답 영역 대기',
+          'json-incomplete': '요청 ID 발견·JSON 수집 중',
+          'json-conflict': '여러 JSON 충돌 확인 중',
+          'json-confirmed': 'JSON 확인·생성 종료 대기',
+          complete: '수집 완료',
+        }[response.stage] || response.stage;
+      this.post({
+        type: 'message',
+        role: 'system',
+        text: `응답 수집 진단\n단계: ${stage}\n응답 후보: ${response.candidates || 0}개 / 현재 요청 ID: ${response.matchingRequestId || 0}개\nJSON: ${response.parsed ? '확인됨' : '미확인'} / 생성 상태: ${response.generating ? '진행 중' : '종료 또는 미감지'}\n수집 경로: ${response.sources?.join(', ') || '없음'}${response.parseError ? '\n해석 상태: ' + response.parseError : ''}`,
+      });
     }
   }
   async stop() {
     this.stopRequested = true;
     this.conversations.invalidate();
     this.runner.stop();
-    if (this.pending) { const pending = this.pending; this.pending = null; pending.resolve(false); }
+    if (this.pending) {
+      const pending = this.pending;
+      this.pending = null;
+      pending.resolve(false);
+    }
     if (this.agent) await this.agent.stop();
     if (this.browser && !this.agent?.running) await this.browser.stop();
     this.post({ type: 'status', text: '중지 요청됨. 이후 응답은 파일에 적용하지 않습니다.' });
   }
   async start(message) {
     if (this.currentRun || this.switchingBrowser) throw new Error('이미 작업 또는 브라우저 전환 중입니다.');
-    const job = this.runTask(message); this.currentRun = job;
-    try { return await job; } finally { if (this.currentRun === job) this.currentRun = null; }
+    const job = this.runTask(message);
+    this.currentRun = job;
+    try {
+      return await job;
+    } finally {
+      if (this.currentRun === job) this.currentRun = null;
+    }
   }
   async runTask(message) {
-    if (this.starting || this.sessionSwitching || this.agent?.running) throw new Error('이미 작업 또는 대화 전환 중입니다.');
+    if (this.starting || this.sessionSwitching || this.agent?.running)
+      throw new Error('이미 작업 또는 대화 전환 중입니다.');
     this.starting = true;
     this.taskId = crypto.randomUUID();
     this.conversations.invalidate();
@@ -220,19 +362,41 @@ class AgentView {
         const relative = path.relative(folder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, '/');
         try {
           const file = await store.readFile(relative);
-          const selection = editor.selection.isEmpty ? file.content : editor.document.getText(editor.selection);
-          if (!editor.selection.isEmpty || selection.length > 10000) { store.ledger.delete(file.path); store.editReads.delete(file.path); }
-          if (selection.length <= 10000) contextFiles.push({ path: file.path, hash: file.hash, selectionOnly: !editor.selection.isEmpty, content: selection });
-          else this.post({ type: 'message', role: 'system', text: '열린 파일이 커서 자동 첨부를 생략했습니다. 에이전트가 필요한 파일을 요청합니다.' });
-        } catch { /* Outside-root or ignored files are not attached. */ }
+          const selection = editor.selection.isEmpty
+            ? file.content
+            : editor.document.getText(editor.selection);
+          if (!editor.selection.isEmpty || selection.length > 10000) {
+            store.ledger.delete(file.path);
+            store.editReads.delete(file.path);
+          }
+          if (selection.length <= 10000)
+            contextFiles.push({
+              path: file.path,
+              hash: file.hash,
+              selectionOnly: !editor.selection.isEmpty,
+              content: selection,
+            });
+          else
+            this.post({
+              type: 'message',
+              role: 'system',
+              text: '열린 파일이 커서 자동 첨부를 생략했습니다. 에이전트가 필요한 파일을 요청합니다.',
+            });
+        } catch {
+          /* Outside-root or ignored files are not attached. */
+        }
       }
       for (const relative of this.attachments) {
-        if (contextFiles.some(file => file.path === relative && !file.selectionOnly)) continue;
+        if (contextFiles.some((file) => file.path === relative && !file.selectionOnly)) continue;
         const file = await store.readFile(relative);
-        if (file.content.length > 10000) { store.ledger.delete(file.path); store.editReads.delete(file.path); contextFiles.push({ path: relative, omitted: '큰 파일입니다. read_file의 줄 범위로 읽으세요.' }); }
-        else contextFiles.push(file);
+        if (file.content.length > 10000) {
+          store.ledger.delete(file.path);
+          store.editReads.delete(file.path);
+          contextFiles.push({ path: relative, omitted: '큰 파일입니다. read_file의 줄 범위로 읽으세요.' });
+        } else contextFiles.push(file);
       }
-      if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
+      if (JSON.stringify(contextFiles).length > 24000)
+        throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
       const { task, mode, intent } = resolveTask(message.task);
       const autoApprove = message.autoApprove === true;
       const unlimitedRounds = message.unlimitedRounds === true;
@@ -240,33 +404,70 @@ class AgentView {
       this.saveSession();
       if (browser.waitForComposer && browser.context) {
         browser.cancelled = false;
-        await browser.waitForComposer(text => this.post({ type: 'status', text }));
+        await browser.waitForComposer((text) => this.post({ type: 'status', text }));
         if (this.stopRequested) throw new Error('작업을 중지했습니다.');
         await this.conversations.prepareWeb();
         const snapshot = await browser.readConversation();
-        if (!this.webUrl || snapshot.url === this.webUrl) { this.events = mergeHistory(this.events, snapshot.messages); if (snapshot.restorable) this.webUrl = snapshot.url; this.saveSession(); this.view?.webview.postMessage(this.state()); }
+        if (!this.webUrl || snapshot.url === this.webUrl) {
+          this.events = mergeHistory(this.events, snapshot.messages);
+          if (snapshot.restorable) this.webUrl = snapshot.url;
+          this.saveSession();
+          this.view?.webview.postMessage(this.state());
+        }
       }
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-      this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
-        mode, intent, autoApprove, unlimitedRounds, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
-        maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
-        runCommand: command => this.runCommand(command, folder.uri.fsPath, autoApprove),
-        approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review), autoApprove) });
+      this.agent = new CodingAgent({
+        store,
+        transport: browser,
+        emit: (event) => this.post(event),
+        mode,
+        intent,
+        autoApprove,
+        unlimitedRounds,
+        conversation: this.events.filter(
+          (event) => event.type === 'message' && ['user', 'assistant'].includes(event.role),
+        ),
+        maxRounds: this.config().get('maxRounds'),
+        maxPromptCharacters: this.config().get('maxPromptCharacters'),
+        runCommand: (command) => this.runCommand(command, folder.uri.fsPath, autoApprove),
+        approveAndApply: (changes, summary) =>
+          this.stageAndApply(store, changes, summary, Boolean(message.review), autoApprove),
+      });
       await this.agent.run(task, JSON.stringify(contextFiles));
-    } catch (error) { errorMessage = error.message; this.post({ type: 'message', role: 'system', text: error.message }); }
-    finally {
+    } catch (error) {
+      errorMessage = error.message;
+      this.post({ type: 'message', role: 'system', text: error.message });
+    } finally {
       this.starting = false;
       this.post({ type: 'idle' });
-      this.post({ type: 'runResult', clientRequestId: message.clientRequestId, task: message.task, success: !errorMessage });
-      this.post({ type: 'status', text: errorMessage || '완료 · 다음 요청을 이어서 입력하세요.', error: Boolean(errorMessage) });
+      this.post({
+        type: 'runResult',
+        clientRequestId: message.clientRequestId,
+        task: message.task,
+        success: !errorMessage,
+      });
+      this.post({
+        type: 'status',
+        text: errorMessage || '완료 · 다음 요청을 이어서 입력하세요.',
+        error: Boolean(errorMessage),
+      });
     }
   }
-  async runCommand(command, root, autoApprove = false) { return this.changes.runCommand(command, root, autoApprove === true); }
-  async stageAndApply(store, changes, summary, review, autoApprove = false) { return this.changes.stageAndApply(store, changes, summary, review, autoApprove === true); }
-  async undo() { return this.changes.undo(); }
+  async runCommand(command, root, autoApprove = false) {
+    return this.changes.runCommand(command, root, autoApprove === true);
+  }
+  async stageAndApply(store, changes, summary, review, autoApprove = false) {
+    return this.changes.stageAndApply(store, changes, summary, review, autoApprove === true);
+  }
+  async undo() {
+    return this.changes.undo();
+  }
   async handle(message) {
     if (!message || typeof message.type !== 'string') return;
-    if (message.type === 'ready') { this.view.webview.postMessage(this.state()); return; }
+    if (message.type === 'ready') {
+      this.view.webview.postMessage(this.state());
+      return;
+    }
     if (message.type === 'showBrowser') return this.showBrowser();
     if (message.type === 'editorBrowser') return this.switchBrowserView('editor');
     if (message.type === 'syncWeb') return this.syncWeb();
@@ -274,7 +475,8 @@ class AgentView {
     if (message.type === 'selectModel') return this.chooseModel(message.id);
     if (message.type === 'copyCode') return this.copyText(message, this.view?.webview);
     if (message.type === 'openResponse') return this.responsePanel.show(message);
-    if (message.type === 'openLink' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) return vscode.env.openExternal(vscode.Uri.parse(message.url));
+    if (message.type === 'openLink' && typeof message.url === 'string' && /^https?:\/\//i.test(message.url))
+      return vscode.env.openExternal(vscode.Uri.parse(message.url));
     if (message.type === 'checkWorkspace') return this.checkWorkspace();
     if (message.type === 'history') return this.showHistory();
     if (message.type === 'listSessions') return this.conversations.publishList();
@@ -283,7 +485,11 @@ class AgentView {
     if (message.type === 'deleteSession') return this.conversations.manageSession('delete', message.id);
     if (message.type === 'deleteAllSessions') return this.conversations.manageSession('deleteAll');
     if (message.type === 'attach') return this.attachFiles();
-    if (message.type === 'removeAttachment' && !this.starting) { this.attachments = this.attachments.filter(file => file !== message.path); this.view.webview.postMessage({ type: 'attachments', files: this.attachments }); return; }
+    if (message.type === 'removeAttachment' && !this.starting) {
+      this.attachments = this.attachments.filter((file) => file !== message.path);
+      this.view.webview.postMessage({ type: 'attachments', files: this.attachments });
+      return;
+    }
     if (message.type === 'undo') return this.undo();
     if (message.type === 'connect') return this.connect();
     if (message.type === 'newChat') return this.newChat();
@@ -291,35 +497,73 @@ class AgentView {
     if (message.type === 'run') return this.start(message);
     if (message.type === 'stop') return this.stop();
     if (message.type === 'apply' || message.type === 'reject') {
-      if (this.pending?.kind === 'changes' && message.token === this.pending.viewData.token) { const pending = this.pending; this.pending = null; pending.resolve(message.type === 'apply'); }
+      if (this.pending?.kind === 'changes' && message.token === this.pending.viewData.token) {
+        const pending = this.pending;
+        this.pending = null;
+        pending.resolve(message.type === 'apply');
+      }
       return;
     }
     if (message.type === 'approveCommand' || message.type === 'rejectCommand') {
-      if (this.pending?.kind === 'command' && message.token === this.pending.viewData.token) { const pending = this.pending; this.pending = null; pending.resolve(message.type === 'approveCommand'); }
+      if (this.pending?.kind === 'command' && message.token === this.pending.viewData.token) {
+        const pending = this.pending;
+        this.pending = null;
+        pending.resolve(message.type === 'approveCommand');
+      }
       return;
     }
     if (message.type === 'preview') {
       if (typeof message.id !== 'string' || !this.previews.has(message.id + '-new')) return;
-      const makeUri = suffix => vscode.Uri.from({ scheme: 'm365-agent-preview', path: '/' + message.id + suffix });
-      return vscode.commands.executeCommand('vscode.diff', makeUri('-old'), makeUri('-new'), 'M365 Agent · 변경 미리보기');
+      const makeUri = (suffix) =>
+        vscode.Uri.from({ scheme: 'm365-agent-preview', path: '/' + message.id + suffix });
+      return vscode.commands.executeCommand(
+        'vscode.diff',
+        makeUri('-old'),
+        makeUri('-new'),
+        'M365 Agent · 변경 미리보기',
+      );
     }
   }
   async copyText(message, target) {
     if (typeof message.text !== 'string' || message.text.length > 1024 * 1024) return;
     let success = false;
-    try { await vscode.env.clipboard.writeText(message.text); success = true; } catch { /* Reply to the originating view without losing the conversation. */ }
+    try {
+      await vscode.env.clipboard.writeText(message.text);
+      success = true;
+    } catch {
+      /* Reply to the originating view without losing the conversation. */
+    }
     target?.postMessage({ type: 'copyResult', id: message.id, success });
   }
-  async dispose() { clearInterval(this.syncTimer); this.responsePanel.dispose(); this.browserPanel.dispose(); await this.stop(); await this.currentRun?.catch(() => {}); if (this.browser) await this.browser.close(); this.output.dispose(); }
+  async dispose() {
+    clearInterval(this.syncTimer);
+    this.responsePanel.dispose();
+    this.browserPanel.dispose();
+    await this.stop();
+    await this.currentRun?.catch(() => {});
+    if (this.browser) await this.browser.close();
+    this.output.dispose();
+  }
 }
 
 function activate(context) {
   const provider = new AgentView(context);
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider('m365Agent.chat', provider, { webviewOptions: { retainContextWhenHidden: true } }));
-  context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('m365-agent-preview', {
-    provideTextDocumentContent: uri => provider.previews.get(uri.path.slice(1)) || ''
-  }));
-  const command = (name, fn) => context.subscriptions.push(vscode.commands.registerCommand(name, () => Promise.resolve(fn()).catch(error => vscode.window.showErrorMessage(error.message))));
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('m365Agent.chat', provider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('m365-agent-preview', {
+      provideTextDocumentContent: (uri) => provider.previews.get(uri.path.slice(1)) || '',
+    }),
+  );
+  const command = (name, fn) =>
+    context.subscriptions.push(
+      vscode.commands.registerCommand(name, () =>
+        Promise.resolve(fn()).catch((error) => vscode.window.showErrorMessage(error.message)),
+      ),
+    );
   command('m365Agent.open', async () => {
     // Restore only this extension's view/container, including saved pre-upgrade placements.
     await vscode.commands.executeCommand('m365Agent.chat.resetViewLocation');
@@ -335,7 +579,11 @@ function activate(context) {
   command('m365Agent.checkWorkspace', () => provider.checkWorkspace());
   command('m365Agent.syncWeb', () => provider.syncWeb());
   command('m365Agent.refreshModels', () => provider.refreshModels());
-  context.subscriptions.push({ dispose: () => { provider.dispose().catch(() => {}); } });
+  context.subscriptions.push({
+    dispose: () => {
+      provider.dispose().catch(() => {});
+    },
+  });
   return { provider };
 }
 module.exports = { activate };

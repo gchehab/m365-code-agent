@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read, edit and delete files in a VS Code workspace.",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -208,8 +208,12 @@
     "test": "node --test test/*.test.js",
     "test:integration": "node scripts/test-integration.cjs",
     "lint": "eslint src media/*.js scripts/*.cjs eslint.config.cjs",
-    "check": "npm run lint && node --check src/extension.js && node --check src/agent.js && node --check src/browser.js && node --check src/composer.js && node --check src/workspace.js && node --check src/protocol.js && node --check src/terminal.js && node --check media/view.js",
-    "package": "node scripts/package.cjs"
+    "check": "npm run lint && npm run format:check && npm run typecheck",
+    "package": "node scripts/package.cjs",
+    "typecheck": "tsc --project tsconfig.json",
+    "format": "prettier --write \"src/**/*.js\" \"media/*.js\" \"scripts/*.cjs\" \"types/**/*.ts\" \"test/*.ts\" eslint.config.cjs prettier.config.cjs tsconfig.json",
+    "format:check": "prettier --check \"src/**/*.js\" \"media/*.js\" \"scripts/*.cjs\" \"types/**/*.ts\" \"test/*.ts\" eslint.config.cjs prettier.config.cjs tsconfig.json",
+    "clean:test-output": "node scripts/clean-test-output.cjs"
   },
   "dependencies": {
     "ignore": "7.0.14",
@@ -218,9 +222,12 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.1.1",
     "eslint": "10.15.0",
-    "globals": "17.14.0"
+    "globals": "17.14.0",
+    "prettier": "3.10.1",
+    "typescript": "6.0.3"
   }
 }
