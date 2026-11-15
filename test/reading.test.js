@@ -164,3 +164,16 @@ test('unlimited requests and automatic approval restore and submit as four indep
   await page.screenshot({ path: path.join(root, '.test-output', 'unlimited-options-ui.png') });
   for (const width of [280, 360]) { await page.setViewportSize({ width, height: 720 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); }
 });
+
+test('deletion review visibly distinguishes removed files and preserves approval tokens and previews', async t => {
+  const { page, host } = await fixture(t, renderWebview(options));
+  await host({ type: 'changes', summary: '구형 이미지 삭제', files: [{ id: 'delete-preview', path: 'assets/old.png', action: 'delete', binary: true, size: 123 }], review: true, forcedReview: ['assets/old.png'], token: 'delete-token' });
+  assert.match(await page.locator('#changeFiles .deleted-file').textContent(), /D · 삭제.*old.png.*바이너리/);
+  assert.match(await page.locator('#reviewReason').textContent(), /파일 삭제/);
+  await page.locator('#changeFiles .file').click(); assert.equal((await page.evaluate(() => window.sent.find(item => item.type === 'preview'))).id, 'delete-preview');
+  await page.locator('#apply').click(); assert.equal((await page.evaluate(() => window.sent.find(item => item.type === 'apply'))).token, 'delete-token');
+  await host({ type: 'changes', summary: '자동 승인 삭제', files: [{ id: 'automatic-delete', path: 'old.js', action: 'delete' }], review: false, autoApproved: true, token: 'automatic' });
+  assert.equal(await page.locator('#apply').isVisible(), false); assert.match(await page.locator('#reviewReason').textContent(), /승인 없이/);
+  await host({ type: 'commandApproval', command: 'npm test', root: 'C:/project', changedFiles: [{ path: 'old.js', action: 'delete', id: 'automatic-delete', currentTask: true }], token: 'command' });
+  assert.match(await page.locator('#commandChanges').textContent(), /삭제 · old.js/);
+});

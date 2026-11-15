@@ -36,12 +36,20 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
       emit({ type: 'tool', id: 'project:' + file, label: 'read_file · ' + file, state: 'done', detail: `${result.content.length.toLocaleString()}자 · ${result.startLine}~${result.endLine}줄 읽음${result.complete ? ' · 전체' : ' · 일부'}` });
     } catch (error) {
       observations.push({ call: { name: 'read_file', path: file }, error: error.message });
-      emit({ type: 'tool', id: 'project:' + file, label: 'read_file · ' + file, state: 'error', detail: error.message });
+      try {
+        const result = await store.fileInfo(file);
+        remaining -= JSON.stringify(result).length;
+        observations.push({ call: { name: 'file_info', path: file }, result });
+        emit({ type: 'tool', id: 'project:' + file, label: 'file_info · ' + file, state: 'done', detail: `${result.size.toLocaleString()} bytes · 본문 대신 파일 해시 확인` });
+      } catch {
+        emit({ type: 'tool', id: 'project:' + file, label: 'read_file · ' + file, state: 'error', detail: error.message });
+      }
     }
   }
-  const read = observations.filter(item => item.result).length;
-  emit({ type: 'tool', id, label: '프로젝트 파일 탐색', state: read ? 'done' : 'error', detail: `${listing.files.length}개 발견${listing.truncated ? ' (목록 일부)' : ''} · ${read}개 본문 읽음` });
-  return { files: { files: ranked.slice(0, 250), directories: listing.directories || [], truncated: listing.truncated || ranked.length > 250 }, history: { kind: 'tool_results', origin: 'automatic_workspace_inspection', observations }, read, discovered: listing.files.length };
+  const read = observations.filter(item => item.result && item.call.name === 'read_file').length;
+  const inspected = observations.filter(item => item.result && item.call.name === 'file_info').length;
+  emit({ type: 'tool', id, label: '프로젝트 파일 탐색', state: read || inspected ? 'done' : 'error', detail: `${listing.files.length}개 발견${listing.truncated ? ' (목록 일부)' : ''} · ${read}개 본문 읽음${inspected ? ' · 파일 정보 ' + inspected + '개 확인' : ''}` });
+  return { files: { files: ranked.slice(0, 250), directories: listing.directories || [], truncated: listing.truncated || ranked.length > 250 }, history: { kind: 'tool_results', origin: 'automatic_workspace_inspection', observations, ...(inspected ? { note: 'file_info provides byte hash/size only, not source text. Do not claim to have analyzed unread file bodies.' } : {}) }, read, inspected, discovered: listing.files.length };
 }
 
 module.exports = { inspectProject, rankFiles };

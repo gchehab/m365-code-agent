@@ -193,6 +193,84 @@ async function run() {
   await provider.undo();
   await assert.rejects(fs.access(path.join(root, 'package.json')));
 
+  // Delete and restore text, UTF-16, binary and empty files through actual VS Code APIs.
+  const deletionFiles = new Map([
+    ['src/legacy-delete.js', Buffer.from('exports.legacy = true;\r\n')],
+    ['assets/delete.bin', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0xff])],
+    ['assets/delete-utf16.txt', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('한글 원본\r\n', 'utf16le')])],
+    ['assets/delete-empty.txt', Buffer.alloc(0)]
+  ]);
+  await fs.mkdir(path.join(root, 'assets'));
+  for (const [name, bytes] of deletionFiles) await fs.writeFile(path.join(root, name), bytes);
+  const deletionStore = await provider.workspaceStore(await provider.rootFolder());
+  const prepareDeletion = async () => {
+    const files = [];
+    for (const name of deletionFiles.keys()) { const info = await deletionStore.fileInfo(name); files.push({ path: info.path, action: 'delete', baseHash: info.hash }); }
+    return deletionStore.prepareChanges(files);
+  };
+  let deleteJob = provider.stageAndApply(deletionStore, await prepareDeletion(), '구형 파일 삭제', false);
+  assert.ok(provider.pending.viewData.files.every(file => file.action === 'delete'));
+  assert.equal(provider.pending.viewData.review, true, 'deletion requires review unless automatic approval is explicit');
+  await provider.handle({ type: 'reject', token: provider.pending.viewData.token }); assert.equal(await deleteJob, false);
+  for (const [name, bytes] of deletionFiles) assert.deepEqual(await fs.readFile(path.join(root, name)), bytes);
+  deleteJob = provider.stageAndApply(deletionStore, await prepareDeletion(), '삭제 승인', false);
+  await provider.handle({ type: 'apply', token: provider.pending.viewData.token }); assert.equal(await deleteJob, true);
+  for (const name of deletionFiles.keys()) await assert.rejects(fs.access(path.join(root, name)));
+  const afterDeleteCommand = provider.runCommand('echo inspect-deleted-files', root);
+  assert.ok(provider.pending.viewData.changedFiles.some(file => file.action === 'delete' && file.path === 'assets/delete.bin'));
+  await provider.handle({ type: 'rejectCommand', token: provider.pending.viewData.token }); await afterDeleteCommand;
+  await provider.undo();
+  for (const [name, bytes] of deletionFiles) assert.deepEqual(await fs.readFile(path.join(root, name)), bytes, 'undo restores original bytes/encoding');
+
+  // Mixed changes must save the correct documents even when deletions come first.
+  await fs.writeFile(path.join(root, 'src/mixed-delete.js'), 'exports.value = 1;\n');
+  const mixedRead = await deletionStore.readFile('src/mixed-delete.js');
+  const mixed = [...await prepareDeletion(), ...await deletionStore.prepareChanges([
+    { path: mixedRead.path, action: 'replace', baseHash: mixedRead.hash, content: 'exports.value = 2;\n' },
+    { path: 'src/mixed-created.js', action: 'create', baseHash: null, content: 'exports.created = true;\n' }
+  ])];
+  assert.equal(await provider.stageAndApply(deletionStore, mixed, '자동 승인 혼합 변경', true, true), true);
+  assert.equal(provider.pending, null);
+  assert.equal(await fs.readFile(path.join(root, 'src/mixed-delete.js'), 'utf8'), 'exports.value = 2;\n');
+  assert.match(await fs.readFile(path.join(root, 'src/mixed-created.js'), 'utf8'), /created/);
+  for (const name of deletionFiles.keys()) await assert.rejects(fs.access(path.join(root, name)));
+  await provider.undo();
+  assert.equal(await fs.readFile(path.join(root, 'src/mixed-delete.js'), 'utf8'), 'exports.value = 1;\n');
+  await assert.rejects(fs.access(path.join(root, 'src/mixed-created.js')));
+  for (const [name, bytes] of deletionFiles) assert.deepEqual(await fs.readFile(path.join(root, name)), bytes);
+
+  // The complete agent -> file_info -> delete -> done flow reports only actual outcomes.
+  let deletionRound = 0;
+  provider.browser.request = async prompt => {
+    const data = JSON.parse(prompt.split('DATA: ')[1]);
+    if (++deletionRound === 1) return { kind: 'tools', calls: [{ name: 'file_info', path: 'assets/delete.bin' }] };
+    if (deletionRound === 2) {
+      const info = data.history.flatMap(item => item.observations || []).findLast(item => item.call.name === 'file_info' && item.result?.path === 'assets/delete.bin').result;
+      return { kind: 'changes', files: [{ path: info.path, action: 'delete', baseHash: info.hash }] };
+    }
+    assert.ok(data.history.some(item => item.kind === 'change_result' && item.applied && item.deletedFiles.includes('assets/delete.bin')));
+    return { kind: 'done', message: '파일 삭제 완료' };
+  };
+  await provider.start({ task: 'assets/delete.bin 파일을 삭제해줘.', autoApprove: true, review: true, includeEditor: false });
+  assert.equal(deletionRound, 3); await assert.rejects(fs.access(path.join(root, 'assets/delete.bin')));
+  await fs.writeFile(path.join(root, 'assets/delete.bin'), 'user recreated file');
+  await assert.rejects(provider.undo(), /다시 생겨/);
+  assert.equal(await fs.readFile(path.join(root, 'assets/delete.bin'), 'utf8'), 'user recreated file');
+  await fs.unlink(path.join(root, 'assets/delete.bin')); await provider.undo();
+  assert.deepEqual(await fs.readFile(path.join(root, 'assets/delete.bin')), deletionFiles.get('assets/delete.bin'));
+
+  // Edits on either side of a deletion approval must be detected before removing the file.
+  const changedInfo = await deletionStore.fileInfo('src/legacy-delete.js');
+  deleteJob = provider.stageAndApply(deletionStore, await deletionStore.prepareChanges([{ path: changedInfo.path, action: 'delete', baseHash: changedInfo.hash }]), '삭제 전 변경 감지', true);
+  await fs.writeFile(path.join(root, changedInfo.path), 'user saved edit\n');
+  await provider.handle({ type: 'apply', token: provider.pending.viewData.token }); await assert.rejects(deleteJob, /변경/);
+  assert.equal(await fs.readFile(path.join(root, changedInfo.path), 'utf8'), 'user saved edit\n');
+  const dirtyInfo = await deletionStore.fileInfo(changedInfo.path);
+  const dirtyDocument = await vscode.workspace.openTextDocument(path.join(root, changedInfo.path));
+  const dirtyEdit = new vscode.WorkspaceEdit(); dirtyEdit.insert(dirtyDocument.uri, new vscode.Position(0, 0), '// unsaved\n'); await vscode.workspace.applyEdit(dirtyEdit);
+  await assert.rejects(provider.stageAndApply(deletionStore, await deletionStore.prepareChanges([{ path: dirtyInfo.path, action: 'delete', baseHash: dirtyInfo.hash }]), 'dirty delete', false, true), /저장하지 않은/);
+  assert.equal(await fs.readFile(path.join(root, changedInfo.path), 'utf8'), 'user saved edit\n'); await dirtyDocument.save();
+
   // A large file is edited using a bounded read and an exact replacement anchor.
   const large = Array.from({ length: 1000 }, (_, i) => `const row${i} = "${'x'.repeat(60)}";`).join('\n');
   await fs.writeFile(path.join(root, 'src', 'large.js'), large);
@@ -274,7 +352,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

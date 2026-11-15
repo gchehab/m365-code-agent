@@ -24,8 +24,8 @@ class CodingAgent {
       const project = await inspectProject(this.store, task, promptBudget, this.emit, () => this.cancelled);
       const files = project.files;
       history.push(project.history);
-      if (project.discovered && !project.read) throw new Error('프로젝트 파일 본문을 읽지 못했습니다. 작업 기록의 파일별 오류를 확인하세요. 분석이나 수정이 완료된 것으로 처리하지 않았습니다.');
-      this.emit({ type: 'message', role: 'system', text: `프로젝트 ${require('node:path').basename(this.store.root)} · ${project.discovered}개 파일 발견 · ${project.read}개 본문을 먼저 읽었습니다.${this.mode !== 'agent' ? ' 이번 요청은 분석·계획으로 처리하며 파일을 수정하지 않습니다.' : ''}` });
+      if (project.discovered && !project.read && !project.inspected) throw new Error('프로젝트 파일 본문을 읽지 못했습니다. 작업 기록의 파일별 오류를 확인하세요. 분석이나 수정이 완료된 것으로 처리하지 않았습니다.');
+      this.emit({ type: 'message', role: 'system', text: `프로젝트 ${require('node:path').basename(this.store.root)} · ${project.discovered}개 파일 발견 · ${project.read}개 본문을 먼저 읽었습니다.${project.inspected ? ' 파일 정보·해시 ' + project.inspected + '개 확인.' : ''}${this.mode !== 'agent' ? ' 이번 요청은 분석·계획으로 처리하며 파일을 수정하지 않습니다.' : ''}` });
       for (let round = 1; this.unlimitedRounds || round <= this.maxRounds; round++) {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         const id = newId();
@@ -67,6 +67,7 @@ class CodingAgent {
               let result;
               const resultBudget = Math.max(256, Math.min(6000, Math.floor((promptBudget - 3500) / Math.min(batchLimit, reply.calls.length))));
               if (call.name === 'read_file') result = await this.store.readFile(call.path, { startLine: call.startLine, startColumn: call.startColumn, lineCount: call.lineCount, maxCharacters: resultBudget });
+              else if (call.name === 'file_info') result = await this.store.fileInfo(call.path);
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit, call.path);
               else if (call.name === 'search_text') result = await this.store.search(call.query, call.paths);
               else if (call.name === 'run_command') {
@@ -81,7 +82,7 @@ class CodingAgent {
               observations.push({ call, result });
               fresh = progress.observe(call, result) || fresh;
               const failed = result.exitCode !== undefined && result.exitCode !== 0;
-              this.emit({ type: 'tool', id: toolId, label, state: failed ? 'error' : 'done', detail: typeof result.content === 'string' ? `${result.content.length.toLocaleString()}자 읽음 · ${result.startLine}~${result.endLine}줄` : result.approved === false ? '실행 거절됨' : result.exitCode !== undefined ? `종료 코드 ${result.exitCode}${result.timedOut ? ' · 시간 초과' : ''}` : undefined });
+              this.emit({ type: 'tool', id: toolId, label, state: failed ? 'error' : 'done', detail: typeof result.content === 'string' ? `${result.content.length.toLocaleString()}자 읽음 · ${result.startLine}~${result.endLine}줄` : call.name === 'file_info' ? `${result.size.toLocaleString()} bytes · 파일 해시 확인` : result.approved === false ? '실행 거절됨' : result.exitCode !== undefined ? `종료 코드 ${result.exitCode}${result.timedOut ? ' · 시간 초과' : ''}` : undefined });
             } catch (error) {
               if (this.cancelled) throw error;
               observations.push({ call, error: error.message });
@@ -97,19 +98,19 @@ class CodingAgent {
           let fresh = false;
           try {
             if (this.mode !== 'agent') throw new Error('이번 요청은 분석·계획이므로 파일을 수정하지 않습니다. 설명 또는 계획으로 답변하세요.');
-            const changes = (await this.store.prepareChanges(reply.files)).filter(change => change.action === 'create' || change.content !== change.original);
+            const changes = (await this.store.prepareChanges(reply.files)).filter(change => change.action === 'create' || change.action === 'delete' || change.content !== change.original);
             if (!changes.length) { const error = new Error('수정안이 현재 파일과 동일합니다. 새 변경 없이 완료한 파일을 다시 적용하지 마세요.'); error.code = 'UNCHANGED_CHANGES'; throw error; }
             this.emit({ type: 'message', role: 'assistant', text: reply.summary || '파일 수정안을 준비했습니다.' });
             const applied = await this.approveAndApply(changes, reply.summary || '파일 수정안');
             if (applied) { appliedFiles += changes.length; fresh = true; progress.lastError = undefined; progress.recordChanges(changes); }
             if (this.cancelled) throw new Error('작업을 중지했습니다.');
-            history.push({ kind: 'change_result', applied, files: changes.map(change => change.path), tests: 'not_run' });
+            history.push({ kind: 'change_result', applied, files: changes.map(change => change.path), deletedFiles: changes.filter(change => change.action === 'delete').map(change => change.path), tests: 'not_run' });
             if (!applied) return { status: 'rejected' };
           } catch (error) {
-            if (this.cancelled) throw error;
+            if (this.cancelled || error.code === 'PARTIAL_DELETE') throw error;
             this.emit({ type: 'message', role: 'system', text: `수정안 검증: ${error.message}` });
             fresh = progress.failure(error);
-            history.push({ kind: 'change_error', error: error.message, nextStep: 'Correct the proposal using actual read_file hashes/content. Existing files need read evidence; create requires baseHash=null and must not overwrite an existing file.' });
+            history.push({ kind: 'change_error', error: error.message, nextStep: 'Correct the proposal using actual read_file or file_info evidence. Existing files need read evidence; create requires baseHash=null and must not overwrite an existing file.' });
             if (this.mode === 'agent') {
               const paths = [...new Set((Array.isArray(reply.files) ? reply.files : []).filter(file => file && typeof file.path === 'string').map(file => file.path))].filter(file => !progress.repaired.has(file)).slice(0, 2);
               const observations = [];
@@ -117,11 +118,12 @@ class CodingAgent {
                 if (this.cancelled) throw new Error('작업을 중지했습니다.', { cause: error });
                 progress.repaired.add(path); const id = newId();
                 this.emit({ type: 'tool', id, label: '수정 대상 자동 확인 · ' + path, state: 'running' });
-                const call = { name: 'read_file', path, startLine: 1, lineCount: 120 };
+                const deleting = reply.files.some(file => file?.path === path && file.action === 'delete');
+                const call = deleting ? { name: 'file_info', path } : { name: 'read_file', path, startLine: 1, lineCount: 120 };
                 try {
-                  const result = await this.store.readFile(path, { startLine: 1, lineCount: 120, maxCharacters: Math.max(256, Math.min(3000, Math.floor((promptBudget - 4000) / paths.length))) });
+                  const result = deleting ? await this.store.fileInfo(path) : await this.store.readFile(path, { startLine: 1, lineCount: 120, maxCharacters: Math.max(256, Math.min(3000, Math.floor((promptBudget - 4000) / paths.length))) });
                   observations.push({ call, result }); fresh = progress.observe(call, result) || fresh;
-                  this.emit({ type: 'tool', id, label: '수정 대상 자동 확인 · ' + path, state: 'done', detail: `${result.content.length}자 · 실제 hash 확인. 검증한 새 수정안을 요청합니다.` });
+                  this.emit({ type: 'tool', id, label: '수정 대상 자동 확인 · ' + path, state: 'done', detail: `${deleting ? result.size + ' bytes' : result.content.length + '자'} · 실제 hash 확인. 검증한 새 수정안을 요청합니다.` });
                 } catch (readError) { observations.push({ call, error: readError.message }); this.emit({ type: 'tool', id, label: '수정 대상 자동 확인 · ' + path, state: 'error', detail: readError.message }); }
               }
               if (observations.length) history.push({ kind: 'tool_results', origin: 'proposal_validation_repair', observations });

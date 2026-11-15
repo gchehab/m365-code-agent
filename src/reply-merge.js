@@ -7,7 +7,7 @@ function stableJson(value) {
   if (value && typeof value === 'object') return '{' + Object.keys(value).filter(key => value[key] !== undefined).sort().map(key => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
   return JSON.stringify(value);
 }
-function fileIdentity(file) { return { path: file.path, action: file.action, baseHash: file.baseHash, content: file.content, edits: file.edits?.map(edit => ({ oldText: edit.oldText, newText: edit.newText })) }; }
+function fileIdentity(file) { return { path: file.path, action: file.action, baseHash: file.baseHash, content: file.action === 'delete' ? undefined : file.content, edits: file.action === 'delete' ? undefined : file.edits?.map(edit => ({ oldText: edit.oldText, newText: edit.newText })) }; }
 function replyIdentity(value) {
   if (value.kind === 'tools') return stableJson({ requestId: value.requestId, kind: value.kind, calls: value.calls });
   if (value.kind === 'changes') return stableJson({ requestId: value.requestId, kind: value.kind, files: value.files.map(fileIdentity) });

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0
+
+- Support explicit delete actions for text, binary and empty workspace files, with file_info byte-hash/size inspection and read/hash verification. Reject excluded/secret/link/outside-root paths and directory deletion.
+- Show deletions distinctly in file review and command approval. Require review for deletion unless the user explicitly enabled automatic approval.
+- Apply deletions through VS Code WorkspaceEdit, support mixed create/edit/delete batches, and restore deleted bytes exactly from in-memory checkpoints without overwriting recreated paths or dirty editors.
+- Preserve backups of confirmed deletions if a resource-edit batch partially fails, and stop automatic retries on that partial failure. Bound deletion backup payloads to 32MB per batch, within existing file/count limits.
+- Allow metadata-only bootstrap for binary-only projects without claiming source-body analysis; repair missing deletion evidence through file_info.
+- Verify binary/UTF-16/empty restoration, rejection/approval, changed/dirty files, collisions and the complete agent deletion flow in real VS Code.
+
 ## 0.10.0
 
 - Keep the default 100-request safety ceiling and add a separate, default-off **요청 횟수 무제한** option. Capture and lock the selected limit policy per task; retain it in VS Code view state.

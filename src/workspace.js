@@ -5,6 +5,13 @@ const crypto = require('node:crypto');
 const ignore = require('ignore');
 
 const digest = text => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+const digestBytes = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+function decodeText(buffer) {
+  const encoding = buffer[0] === 0xff && buffer[1] === 0xfe ? 'utf-16le' : buffer[0] === 0xfe && buffer[1] === 0xff ? 'utf-16be' : 'utf-8';
+  const content = new TextDecoder(encoding, { fatal: true }).decode(buffer);
+  if (content.includes('\0')) throw new Error('바이너리 파일입니다.');
+  return content;
+}
 const blocked = /(^|\/)(\.git|node_modules|\.venv|venv|\.ssh|\.aws|\.azure|\.kube|\.m365-agent)(\/|$)|(^|\/)\.env[^/]*$|\.(pem|key|pfx|p12|jks|keystore)$|(^|\/)(\.npmrc|\.pypirc|\.netrc|\.yarnrc\.ya?ml|id_rsa|id_dsa|id_ecdsa|id_ed25519|credentials(?:\.(json|ini|toml|ya?ml))?|appsettings(?:\.[^/]*)?\.json)$|\.tfstate(?:\.[^/]*)?$|(^|\/)\.docker\/config\.json$/i;
 
 class WorkspaceStore {
@@ -13,6 +20,7 @@ class WorkspaceStore {
     this.readText = readText;
     this.ledger = new Map();
     this.editReads = new Map();
+    this.deleteReads = new Map();
     this.ignores = ignore();
     this.maxFileBytes = maxFileBytes;
   }
@@ -90,6 +98,20 @@ class WorkspaceStore {
     const hash = digest(content);
     return { path: normalized, hash, content };
   }
+  async loadBytes(input) {
+    const { normalized, target } = await this.resolve(input);
+    const stat = await fs.stat(target);
+    if (!stat.isFile()) throw new Error('파일만 삭제할 수 있습니다. 폴더 재귀 삭제는 지원하지 않습니다.');
+    if (stat.size > this.maxFileBytes) throw new Error('파일 크기 제한을 초과했습니다. 파일 크기 설정을 확인하세요.');
+    const buffer = await fs.readFile(target);
+    if (buffer.length > this.maxFileBytes) throw new Error('파일 크기 제한을 초과했습니다.');
+    return { path: normalized, target, buffer, hash: digestBytes(buffer) };
+  }
+  async fileInfo(input) {
+    const file = await this.loadBytes(input);
+    this.deleteReads.set(file.path, file.hash);
+    return { path: file.path, kind: 'file', hash: file.hash, hashType: 'sha256-bytes', size: file.buffer.length };
+  }
   async readFile(input, options) {
     const file = await this.loadFile(input);
     let result = file;
@@ -153,12 +175,25 @@ class WorkspaceStore {
     const seen = new Set();
     const changes = [];
     let bytes = 0;
+    let deletedBytes = 0;
     for (const file of files) {
-      if (!file || !['create', 'replace', 'edit'].includes(file.action) || (file.action !== 'edit' && typeof file.content !== 'string')) throw new Error('지원하지 않는 변경 형식입니다.');
+      if (!file || !['create', 'replace', 'edit', 'delete'].includes(file.action) || (['create', 'replace'].includes(file.action) && typeof file.content !== 'string')) throw new Error('지원하지 않는 변경 형식입니다.');
       const { normalized, target } = await this.resolve(file.path, file.action === 'create');
       const key = normalized.toLowerCase();
       if (seen.has(key)) throw new Error('동일 파일을 중복 변경할 수 없습니다.');
       seen.add(key);
+      if (file.action === 'delete') {
+        const byteRead = this.deleteReads.get(normalized) === file.baseHash;
+        if (typeof file.baseHash !== 'string' || !/^[a-f0-9]{64}$/.test(file.baseHash) || (!byteRead && this.editReads.get(normalized)?.hash !== file.baseHash)) throw new Error(`먼저 read_file 또는 file_info로 파일을 확인하고 정확한 hash를 사용해야 합니다: ${normalized}`);
+        const snapshot = await this.loadBytes(normalized);
+        if (byteRead ? snapshot.hash !== file.baseHash : digest(decodeText(snapshot.buffer)) !== file.baseHash) throw new Error(`확인 뒤 파일이 변경되었습니다. 다시 확인하세요: ${normalized}`);
+        deletedBytes += snapshot.buffer.length;
+        if (deletedBytes > 32 * 1024 * 1024) throw new Error('한 번의 삭제 백업은 총 32MB까지 지원합니다. 파일 묶음을 줄이세요.');
+        let original, binary = false;
+        try { original = decodeText(snapshot.buffer); } catch { binary = true; original = `[바이너리 파일 · ${snapshot.buffer.length.toLocaleString()} bytes]\n`; }
+        changes.push({ path: normalized, target, action: 'delete', content: '', original, binary, originalBytes: snapshot.buffer, expectedHash: file.baseHash, expectedDiskHash: snapshot.hash });
+        continue;
+      }
       let original = null;
       let content = file.content;
       if (file.action === 'create') {
@@ -201,6 +236,8 @@ class WorkspaceStore {
       if (change.action === 'create') {
         try { await fs.lstat(change.target); throw new Error(`새 파일 경로가 이미 생겼습니다: ${change.path}`); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
+      } else if (change.action === 'delete') {
+        if ((await this.loadBytes(change.path)).hash !== change.expectedDiskHash) throw new Error(`미리보기 이후 파일이 변경되었습니다: ${change.path}`);
       } else if ((await this.loadFile(change.path)).hash !== change.expectedHash) throw new Error(`미리보기 이후 파일이 변경되었습니다: ${change.path}`);
     }
   }

@@ -242,10 +242,10 @@ window.addEventListener('message', ({ data }) => {
   if (data.type === 'attachments') attachments(data.files);
   if (data.type === 'changes') {
     reviewToken = data.token;
-    el('reviewReason').textContent = data.autoApproved ? '승인 없이 진행 · 검증 후 자동 적용합니다.' : data.forcedReview?.length ? '실행 설정·스크립트 변경은 자동 적용 설정과 관계없이 검토가 필요합니다.' : '';
+    el('reviewReason').textContent = data.autoApproved ? '승인 없이 진행 · 검증 후 자동 적용합니다.' : data.forcedReview?.length ? '파일 삭제·실행 설정 변경은 자동 적용 설정과 관계없이 검토가 필요합니다.' : '';
     el('changes').hidden = false; el('changeTitle').textContent = data.summary; el('changeFiles').replaceChildren();
     for (const file of data.files) {
-      const button = document.createElement('button'); button.className = 'file'; button.textContent = `${file.action === 'create' ? '+' : 'M'}  ${file.path}`; button.title = 'VS Code에서 diff 열기';
+      const button = document.createElement('button'); button.className = 'file' + (file.action === 'delete' ? ' deleted-file' : ''); button.textContent = `${file.action === 'delete' ? 'D · 삭제' : file.action === 'create' ? '+' : 'M'}  ${file.path}${file.binary ? ' (바이너리)' : ''}`; button.title = file.action === 'delete' ? '삭제할 파일 미리보기' : 'VS Code에서 diff 열기';
       button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id })); el('changeFiles').append(button);
     }
     el('apply').hidden = !data.review; el('reject').hidden = !data.review;
@@ -261,7 +261,7 @@ window.addEventListener('message', ({ data }) => {
         if (!files.length) continue;
         const title = document.createElement('p'); title.textContent = (currentTask ? '이번 요청에서 변경한 파일' : '이전 요청에서 변경한 파일') + ' · 파일명을 눌러 diff 검토'; el('commandChanges').append(title);
         for (const file of files) {
-          const button = document.createElement('button'); button.className = 'file'; button.textContent = `${file.sensitive ? '실행 설정 · ' : ''}${file.path}`; button.disabled = !file.id;
+          const button = document.createElement('button'); button.className = 'file'; button.textContent = `${file.action === 'delete' ? '삭제 · ' : ''}${file.sensitive ? '실행 설정 · ' : ''}${file.path}`; button.disabled = !file.id;
           button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id })); el('commandChanges').append(button);
         }
       }

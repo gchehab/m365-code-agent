@@ -4,15 +4,39 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { digest } = require('./workspace');
 const { requiresReview } = require('./policy');
+async function exists(target) { try { await fs.lstat(target); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 
 class ChangeController {
   constructor(host, vscode) { this.host = host; this.vscode = vscode; }
+  assertNoDirtyDeletions(changes) {
+    for (const change of changes.filter(change => change.action === 'delete')) {
+      if ((this.vscode.workspace?.textDocuments || []).some(document => document.uri.scheme === 'file' && path.resolve(document.uri.fsPath).toLowerCase() === path.resolve(change.target).toLowerCase() && document.isDirty)) throw new Error(`저장하지 않은 변경이 있는 파일은 삭제·복원하지 않습니다: ${change.path}`);
+    }
+  }
+  recordCheckpoint(store, changes) {
+    const host = this.host;
+    host.checkpoints.push({ store, changes });
+    for (const change of changes) { change.taskId = host.taskId; host.changedFiles.set(store.root.toLowerCase() + '\0' + change.path.toLowerCase(), { root: store.root, path: change.path, action: change.action, id: change.previewId, taskId: host.taskId }); }
+    host.checkpoints = host.checkpoints.slice(-20);
+    host.post({ type: 'undoState', available: true });
+  }
+  async preservePartialDeletes(store, changes) {
+    const missing = [];
+    for (const change of changes.filter(change => change.action === 'delete')) {
+      try {
+        await store.resolve(change.path, true);
+        if (!await exists(change.target)) missing.push(change);
+      } catch (error) { this.host.output?.appendLine(`삭제 상태 확인 실패 · ${change.path}: ${error.message}`); }
+    }
+    if (missing.length) this.recordCheckpoint(store, missing);
+    return missing.length;
+  }
   async runCommand(command, root, autoApprove = false) {
     const host = this.host;
     if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command)) throw new Error('명령 형식이 올바르지 않습니다.');
     if (host.stopRequested) throw new Error('작업을 중지했습니다.');
     const approved = autoApprove === true || await new Promise(resolve => {
-      const changedFiles = [...host.changedFiles.values()].filter(file => path.resolve(file.root).toLowerCase() === path.resolve(root).toLowerCase()).map(file => ({ path: file.path, id: host.previews.has(file.id + '-new') ? file.id : null, sensitive: requiresReview(file.path), currentTask: file.taskId === host.taskId }));
+      const changedFiles = [...host.changedFiles.values()].filter(file => path.resolve(file.root).toLowerCase() === path.resolve(root).toLowerCase()).map(file => ({ path: file.path, action: file.action, id: host.previews.has(file.id + '-new') ? file.id : null, sensitive: requiresReview(file.path), currentTask: file.taskId === host.taskId }));
       const viewData = { type: 'commandApproval', command, root, changedFiles, token: crypto.randomUUID() };
       host.pending = { kind: 'command', resolve, viewData };
       host.post(viewData);
@@ -28,7 +52,8 @@ class ChangeController {
   async stageAndApply(store, changes, summary, review, autoApprove = false) {
     const host = this.host;
     const vscode = this.vscode;
-    const forcedReview = autoApprove === true ? [] : changes.filter(change => requiresReview(change.path)).map(change => change.path);
+    this.assertNoDirtyDeletions(changes);
+    const forcedReview = autoApprove === true ? [] : changes.filter(change => change.action === 'delete' || requiresReview(change.path)).map(change => change.path);
     review = autoApprove !== true && (review || forcedReview.length > 0);
     for (const change of changes) {
       const id = crypto.randomUUID();
@@ -37,7 +62,7 @@ class ChangeController {
       host.previews.set(id + '-new', change.content);
       if (host.previews.size > 200) host.previews.delete(host.previews.keys().next().value);
     }
-    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId })), review, autoApproved: autoApprove === true, forcedReview, token: crypto.randomUUID() };
+    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId, binary: change.binary, size: change.originalBytes?.length })), review, autoApproved: autoApprove === true, forcedReview, token: crypto.randomUUID() };
     if (review) {
       host.post({ type: 'status', text: `파일 ${changes.length}개 변경 승인 대기 · diff를 확인하고 적용을 누르세요.` });
       const approved = await new Promise(resolve => { host.pending = { kind: 'changes', resolve, changes, viewData }; host.post(viewData); });
@@ -51,7 +76,9 @@ class ChangeController {
     const documents = [];
     for (const change of changes) {
       const uri = vscode.Uri.file(change.target);
-      if (change.action === 'create') {
+      if (change.action === 'delete') {
+        edit.deleteFile(uri, { recursive: false, ignoreIfNotExists: false });
+      } else if (change.action === 'create') {
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.target)));
         edit.createFile(uri, { overwrite: false, ignoreIfExists: false });
         edit.insert(uri, new vscode.Position(0, 0), change.content);
@@ -61,24 +88,35 @@ class ChangeController {
         if (digest(document.getText()) !== change.expectedHash) throw new Error(`파일이 변경되었습니다: ${change.path}`);
         edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), change.content);
       }
-      documents.push(uri);
+      documents.push({ uri, change });
     }
     await store.verifyChanges(changes);
     if (host.stopRequested || host.agent?.cancelled) return false;
-    if (!await vscode.workspace.applyEdit(edit, { isRefactoring: false })) throw new Error('VS Code가 변경 적용을 거부했습니다. 편집기에서 파일 상태를 확인하세요.');
-    host.checkpoints.push({ store, changes });
-    for (const change of changes) { change.taskId = host.taskId; host.changedFiles.set(store.root.toLowerCase() + '\0' + change.path.toLowerCase(), { root: store.root, path: change.path, id: change.previewId, taskId: host.taskId }); }
-    host.checkpoints = host.checkpoints.slice(-20);
-    host.post({ type: 'undoState', available: true });
+    this.assertNoDirtyDeletions(changes);
+    let applied = false, applyError;
+    try { applied = await vscode.workspace.applyEdit(edit, { isRefactoring: false }); } catch (error) { applyError = error; }
+    if (!applied) {
+      const partial = await this.preservePartialDeletes(store, changes);
+      const error = new Error(`VS Code가 변경을 완료하지 못했습니다.${partial ? ' 이미 삭제된 ' + partial + '개 파일의 백업을 보관했습니다. 되돌리기로 복원할 수 있습니다.' : ' 편집기에서 파일 상태를 확인하세요.'}`, { cause: applyError });
+      if (partial) error.code = 'PARTIAL_DELETE';
+      throw error;
+    }
+    this.recordCheckpoint(store, changes);
     const failed = [];
-    for (const [index, uri] of documents.entries()) {
+    for (const { uri, change } of documents) {
+      if (change.action === 'delete') {
+        change.appliedHash = null; change.diskHash = null;
+        if (await exists(change.target)) throw new Error(`삭제를 확인하지 못했습니다. 현재 파일 상태를 확인하세요: ${change.path}`);
+        continue;
+      }
       const document = await vscode.workspace.openTextDocument(uri);
       if (!await document.save()) failed.push(path.basename(uri.fsPath));
-      changes[index].appliedHash = digest(document.getText());
-      changes[index].diskHash = await fs.readFile(uri.fsPath, 'utf8').then(digest).catch(() => null);
+      change.appliedHash = digest(document.getText());
+      change.diskHash = await fs.readFile(uri.fsPath, 'utf8').then(digest).catch(() => null);
     }
     if (failed.length) throw new Error(`편집기에 적용했지만 저장하지 못한 파일이 있습니다: ${failed.join(', ')}. 직접 확인하세요.`);
-    host.post({ type: 'message', role: 'system', text: `${autoApprove === true ? '승인 없이 진행 · ' : ''}${changes.length}개 파일을 적용하고 저장했습니다. 테스트는 실행하지 않았습니다.` });
+    const deleted = changes.filter(change => change.action === 'delete').length;
+    host.post({ type: 'message', role: 'system', text: `${autoApprove === true ? '승인 없이 진행 · ' : ''}${changes.length}개 파일 변경을 적용했습니다.${deleted ? ' 삭제 ' + deleted + '개.' : ' 저장 완료.'} 테스트는 실행하지 않았습니다.` });
     host.post({ type: 'applied' });
     return true;
   }
@@ -90,20 +128,35 @@ class ChangeController {
     if (!checkpoint) return;
     const edit = new vscode.WorkspaceEdit();
     const saves = [];
+    const restores = [];
+    this.assertNoDirtyDeletions(checkpoint.changes);
     for (const change of checkpoint.changes) {
-      await checkpoint.store.resolve(change.path);
+      await checkpoint.store.resolve(change.path, change.action === 'delete');
       const uri = vscode.Uri.file(change.target);
+      if (change.action === 'delete') {
+        if (await exists(change.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
+        edit.createFile(uri, { overwrite: false, ignoreIfExists: false, contents: change.originalBytes });
+        restores.push(change);
+        continue;
+      }
       const document = await vscode.workspace.openTextDocument(uri);
       if (document.isDirty || digest(document.getText()) !== change.appliedHash || digest(await fs.readFile(change.target, 'utf8')) !== change.diskHash) throw new Error(`이후 편집이 있어 되돌릴 수 없습니다: ${change.path}`);
       if (change.action === 'create') edit.deleteFile(uri, { recursive: false });
       else { edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), change.original); saves.push(uri); }
     }
+    for (const change of restores) {
+      await checkpoint.store.resolve(change.path, true);
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.target)));
+      await checkpoint.store.resolve(change.path, true);
+      if (await exists(change.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
+    }
+    this.assertNoDirtyDeletions(checkpoint.changes);
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('되돌리기를 적용하지 못했습니다.');
     host.checkpoints.pop();
     for (const change of checkpoint.changes) {
       const key = checkpoint.store.root.toLowerCase() + '\0' + change.path.toLowerCase();
       const previous = [...host.checkpoints].reverse().filter(item => item.store.root === checkpoint.store.root).flatMap(item => item.changes).find(item => item.path === change.path);
-      if (previous) host.changedFiles.set(key, { root: checkpoint.store.root, path: previous.path, id: previous.previewId, taskId: previous.taskId });
+      if (previous) host.changedFiles.set(key, { root: checkpoint.store.root, path: previous.path, action: previous.action, id: previous.previewId, taskId: previous.taskId });
       else host.changedFiles.delete(key);
     }
     for (const uri of saves) if (!await (await vscode.workspace.openTextDocument(uri)).save()) throw new Error('되돌린 내용을 저장하지 못했습니다. 편집기를 확인하세요.');

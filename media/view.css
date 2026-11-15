@@ -101,3 +101,5 @@ summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-of
 
 .option-badges { float: right; display: inline-flex; align-items: center; gap: 6px; }
 #roundMode { font-size: 10px; color: var(--vscode-textLink-foreground); }
+
+.deleted-file { color: var(--vscode-errorForeground)!important; }
