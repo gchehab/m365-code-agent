@@ -13,7 +13,7 @@ VS Code의 프로젝트를 읽고 수정하며, 로그인된 M365 Copilot 웹과
 
 ## 설치
 
-1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.12.0.vsix`를 선택합니다.
+1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.12.1.vsix`를 선택합니다.
 2. 프로젝트 폴더를 열고 오른쪽 보조 사이드바의 M365 Agent를 엽니다. 명령 팔레트에서 `M365 Agent: 오른쪽에서 열기`로도 열 수 있습니다.
 3. 입력창 아래 `연결`을 누릅니다. VS Code 편집기 탭에 `M365 Copilot 브라우저`가 열립니다. PC에 설치된 Edge의 실제 자동화 페이지를 이 탭에서 보고 조작합니다.
 4. 이 브라우저 탭에서 **회사 계정 로그인과 MFA를 직접** 완료하고 Copilot 대화 화면으로 이동합니다. 마우스·스크롤·입력·한글 IME를 지원합니다. 네이티브 OS 인증 창이 필요한 경우 `외부 브라우저로 전환`을 사용하세요.

@@ -273,7 +273,7 @@ class WorkspaceStore {
       }
       bytes += Buffer.byteLength(file.action === 'edit' ? JSON.stringify(file.edits) : content, 'utf8');
       if (bytes > 512 * 1024 || Buffer.byteLength(content, 'utf8') > this.maxFileBytes || content.includes('\0')) throw new Error('변경 내용이 너무 크거나 텍스트가 아닙니다.');
-      changes.push({ ...file, content, path: normalized, target, original: original?.content ?? '', expectedHash: original?.hash ?? null });
+      changes.push({ ...file, directory: false, content, path: normalized, target, original: original?.content ?? '', expectedHash: original?.hash ?? null });
     }
     for (const change of changes.filter(change => change.directory)) if (changes.some(other => other !== change && other.path.toLowerCase().startsWith(change.path.toLowerCase() + '/'))) throw new Error('폴더와 그 내부 경로를 같은 묶음에서 중복 변경할 수 없습니다. 폴더만 지정하세요.');
     return changes;

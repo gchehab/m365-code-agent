@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1
+
+- Keep file/folder classification host-controlled. Ignore a model-supplied directory flag on ordinary create/edit/replace proposals so valid file changes cannot be skipped as folder-only operations.
+
 ## 0.12.0
 
 - Fix transient Copilot control replacement causing `locator.isEnabled` timeouts. Read button state atomically, retry only before dispatch, and collect acknowledgement after uncertain click completion without clicking again.

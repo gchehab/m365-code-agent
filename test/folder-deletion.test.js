@@ -48,6 +48,15 @@ test('folder inspection stops during scanning without granting a deletion hash',
   assert.equal(store.directoryReads.has('old'), false);
 });
 
+test('model-supplied directory metadata cannot turn an ordinary file change into a folder operation', async t => {
+  const { store } = await fixture(t);
+  const [created] = await store.prepareChanges([{ path: 'new.js', action: 'create', baseHash: null, content: 'new\n', directory: true }]);
+  assert.equal(created.directory, false);
+  const file = await store.readFile('old/a.js');
+  const [replaced] = await store.prepareChanges([{ path: file.path, action: 'replace', baseHash: file.hash, content: 'updated\n', directory: true }]);
+  assert.equal(replaced.directory, false);
+});
+
 test('folder metadata enforces entry and backup limits without authorizing a partial tree', async t => {
   const { root, store } = await fixture(t);
   await fs.mkdir(path.join(root, 'many'));
