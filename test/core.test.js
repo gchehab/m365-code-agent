@@ -31,6 +31,19 @@ test('workspace prevents traversal, secrets, ignored files and Windows reserved 
   assert.deepEqual(files.files, ['.gitignore', 'src/average.js']);
 });
 
+test('typed agent dispatch preserves literal whitespace search queries', async t => {
+  const { root, store } = await fixture(t); await fs.writeFile(path.join(root, 'src/indented.js'), '    returnValue();\n');
+  let requests = 0;
+  const agent = new CodingAgent({ store, emit() {}, transport: { async request(prompt) {
+    if (++requests === 1) return { kind: 'tools', calls: [{ name: 'search_text', query: '    ', paths: ['src/indented.js'] }] };
+    const data = JSON.parse(prompt.split('DATA: ')[1]);
+    const observation = data.history.findLast(entry => entry.kind === 'tool_results').observations[0];
+    assert.equal(observation.error, undefined); assert.equal(observation.result.matches[0].path, 'src/indented.js');
+    return { kind: 'done', message: 'Found indentation.' };
+  } } });
+  assert.equal((await agent.run('Find lines with four spaces.')).status, 'done'); assert.equal(requests, 2);
+});
+
 test('symlink/junction escapes are rejected for reads and creates', async t => {
   const { root, store } = await fixture(t);
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'm365-outside-'));

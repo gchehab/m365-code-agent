@@ -48,16 +48,21 @@ async function assertTreeBounds(target, root) {
     path.resolve(await fs.realpath(target)).toLowerCase() !== path.resolve(target).toLowerCase()
   )
     throw new Error('링크·정션은 정리하지 않습니다.');
+  let bytes = stat.isFile() ? stat.size : 0;
   if (stat.isDirectory())
-    for (const entry of await fs.readdir(target)) await assertTreeBounds(path.join(target, entry), root);
+    for (const entry of await fs.readdir(target))
+      bytes += await assertTreeBounds(path.join(target, entry), root);
+  return bytes;
 }
-async function planCleanup(repo, { keep = 3, olderThanHours = 24, now = Date.now() } = {}) {
+const identity = (stat) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+// This pass checks only the output root and immediate run metadata, never their trees.
+async function selectRuns(repo, { keep = 3, olderThanHours = 24, now = Date.now() } = {}) {
   if (!Number.isSafeInteger(keep) || keep < 1 || !Number.isFinite(olderThanHours) || olderThanHours < 1)
     throw new Error('keep은 1 이상의 정수, older-than-hours는 1 이상의 숫자여야 합니다.');
   const realRepo = await fs.realpath(repo),
     root = path.join(realRepo, '.test-output');
   const stat = await statOrNull(root);
-  if (!stat) return { root, candidates: [], keep, olderThanHours };
+  if (!stat) return { root, runs: [], keep, olderThanHours };
   if (
     !stat.isDirectory() ||
     stat.isSymbolicLink() ||
@@ -68,38 +73,69 @@ async function planCleanup(repo, { keep = 3, olderThanHours = 24, now = Date.now
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^integration-[a-z0-9]+$/i.test(entry.name)) continue;
     const target = path.join(root, entry.name),
-      info = await fs.lstat(target);
-    if (!info.isSymbolicLink()) runs.push({ name: entry.name, target, modified: info.mtimeMs });
+      info = await statOrNull(target);
+    if (info?.isDirectory() && !info.isSymbolicLink())
+      runs.push({ name: entry.name, target, modified: info.mtimeMs, identity: identity(info) });
   }
   runs.sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name));
-  const candidates = [];
-  for (const run of runs.slice(keep)) {
-    if (now - run.modified < olderThanHours * 3600000 || !(await ownedFinishedRun(run.target))) continue;
+  return {
+    root,
+    keep,
+    olderThanHours,
+    runs: runs.slice(keep).filter((run) => now - run.modified >= olderThanHours * 3600000),
+  };
+}
+async function inspectPlan(repo, options) {
+  const selection = await selectRuns(repo, options),
+    selected = new Map();
+  let candidateBytes = 0;
+  for (const run of selection.runs) {
+    if (!(await ownedFinishedRun(run.target))) continue;
     try {
-      await assertTreeBounds(run.target, root);
-      candidates.push(run.name);
+      candidateBytes += await assertTreeBounds(run.target, selection.root);
+      selected.set(run.name, run);
     } catch {
       /* Keep linked or unstable output. */
     }
   }
-  return { root, candidates, keep, olderThanHours };
+  const report = {
+    root: selection.root,
+    candidates: [...selected.keys()],
+    keep: selection.keep,
+    olderThanHours: selection.olderThanHours,
+    candidateBytes,
+  };
+  return { report, selected };
+}
+async function planCleanup(repo, options = {}) {
+  return (await inspectPlan(repo, options)).report;
 }
 async function cleanTestOutput(repo, options = {}) {
-  const plan = await planCleanup(repo, options),
+  const { report, selected } = await inspectPlan(repo, options),
     removed = [];
+  let removedBytes = 0;
   if (options.apply === true)
-    for (const name of plan.candidates) {
-      // Recompute retention/ownership immediately before removing each verified target.
-      const current = await planCleanup(repo, options);
-      if (!current.candidates.includes(name)) continue;
+    for (const [name, planned] of selected) {
+      // Refresh retention/age without walking any other run. Check only this target's tree.
+      const current = await selectRuns(repo, options),
+        run = current.runs.find((item) => item.name === name);
+      if (!run || run.identity !== planned.identity || !(await ownedFinishedRun(run.target))) continue;
       const target = path.resolve(current.root, name);
       if (path.dirname(target) !== path.resolve(current.root))
         throw new Error('정리 대상 경로 검증에 실패했습니다.');
-      await assertTreeBounds(target, current.root);
+      const bytes = await assertTreeBounds(target, current.root);
+      const finalStat = await fs.lstat(target);
+      if (
+        identity(finalStat) !== planned.identity ||
+        finalStat.mtimeMs !== run.modified ||
+        !(await ownedFinishedRun(target))
+      )
+        continue;
       await fs.rm(target, { recursive: true, force: false });
       removed.push(name);
+      removedBytes += bytes;
     }
-  return { ...plan, dryRun: options.apply !== true, removed };
+  return { ...report, dryRun: options.apply !== true, removed, removedBytes };
 }
 async function main(args) {
   const options = {};

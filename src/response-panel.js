@@ -3,7 +3,31 @@ const { randomBytes } = require('node:crypto');
 const { renderMarkdown } = require('./markdown');
 
 function renderResponse({ text, nonce, cspSource, resource }) {
-  return `<!doctype html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${resource('view.css')}"></head><body class="reader wrap-code"><header class="reader-header"><strong>M365 Copilot · 답변</strong><button id="copyResponse">답변 복사</button><label><input id="wrapCode" type="checkbox" checked>코드 줄바꿈</label><button id="fontSmaller" aria-label="글자 작게">A−</button><output id="fontSize">14</output><button id="fontLarger" aria-label="글자 크게">A+</button></header><main class="reader-content markdown">${renderMarkdown(text)}</main><script nonce="${nonce}" src="${resource('reading.js')}"></script><script nonce="${nonce}" src="${resource('response-view.js')}"></script></body></html>`;
+  return `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource}; script-src 'nonce-${nonce}';">
+<link rel="stylesheet" href="${resource('view.css')}">
+</head>
+<body class="reader wrap-code">
+<header class="reader-header">
+<strong>M365 Copilot · 답변</strong>
+<button id="copyResponse">답변 복사</button>
+<label>
+<input id="wrapCode" type="checkbox" checked>코드 줄바꿈</label>
+<button id="fontSmaller" aria-label="글자 작게">A−</button>
+<output id="fontSize">14</output>
+<button id="fontLarger" aria-label="글자 크게">A+</button>
+</header>
+<main class="reader-content markdown">${renderMarkdown(text)}</main>
+<script nonce="${nonce}" src="${resource('reading.js')}">
+</script>
+<script nonce="${nonce}" src="${resource('response-view.js')}">
+</script>
+</body>
+</html>`;
 }
 
 class ResponsePanel {

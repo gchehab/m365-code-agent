@@ -13,7 +13,7 @@ VS Code의 프로젝트를 읽고 수정하며, 로그인된 M365 Copilot 웹과
 
 ## 설치
 
-1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.13.0.vsix`를 선택합니다.
+1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.13.1.vsix`를 선택합니다.
 2. 프로젝트 폴더를 열고 오른쪽 보조 사이드바의 M365 Agent를 엽니다. 명령 팔레트에서 `M365 Agent: 오른쪽에서 열기`로도 열 수 있습니다.
 3. 입력창 아래 `연결`을 누릅니다. VS Code 편집기 탭에 `M365 Copilot 브라우저`가 열립니다. PC에 설치된 Edge의 실제 자동화 페이지를 이 탭에서 보고 조작합니다.
 4. 이 브라우저 탭에서 **회사 계정 로그인과 MFA를 직접** 완료하고 Copilot 대화 화면으로 이동합니다. 마우스·스크롤·입력·한글 IME를 지원합니다. 네이티브 OS 인증 창이 필요한 경우 `외부 브라우저로 전환`을 사용하세요.
@@ -163,7 +163,7 @@ npm run test:integration
 npm run package
 ```
 
-`npm run check`는 ESLint, Prettier 포맷 검사, JSDoc 기반 타입 검사를 실행합니다. `npm run format`으로 런타임 JS·개발 스크립트를 정리할 수 있습니다. 도구 호출 정규화와 WorkspaceStore의 파일 검증 경계에 `// @ts-check`를 적용했으며, create/edit/delete 제안 및 파일·폴더 스냅샷은 `types/contracts.d.ts`로 구분합니다. 타입 검사는 현재 이 경계부터 점진적으로 적용하며 전체 VS Code UI까지 적용한 상태는 아닙니다. 실행 코드는 CommonJS JavaScript 그대로이며 TypeScript·Prettier는 개발 의존성입니다.
+`npm run check`는 ESLint, Prettier 포맷 검사, JSDoc 기반 타입 검사를 실행합니다. `npm run format`으로 런타임 JS·개발 스크립트를 정리할 수 있습니다. `tool-call.js`, `workspace.js`, `changes.js`, `agent.js`에 `// @ts-check`를 적용하고 `strict: true`, `noImplicitAny: true`로 검사합니다. create/edit/delete 제안, 원본 바이트가 필수인 복원 백업, 승인 호스트와 에이전트 전송 계약은 `types/contracts.d.ts`로 구분하며 VS Code API는 최소 지원 버전의 공식 타입을 사용합니다. 전체 UI 모듈까지 검사한 상태는 아닙니다. 실행 코드는 CommonJS JavaScript 그대로이며 TypeScript·Prettier는 개발 의존성입니다.
 
 테스트 산출물 정리 명령은 기본적으로 삭제 예정 목록만 표시합니다.
 
@@ -172,7 +172,7 @@ npm run clean:test-output
 npm run clean:test-output -- --apply --keep=3 --older-than-hours=24
 ```
 
-정리 범위는 이 저장소의 `.test-output/integration-*` 중 완료가 확인된 이전 실행 폴더뿐입니다. 최근 3개와 24시간 이내 결과를 보존하며, 실행 중인 프로세스·링크/정션·출처를 확인할 수 없는 폴더는 건너뜁니다. 새 실행에는 상태 마커를 기록하고 이전 성공 실행은 결과 보고서로 확인합니다. 프로젝트 코드·배포 파일·전용 Copilot 로그인 프로필과 상위 `.playwright-mcp` 기록은 이 명령의 정리 범위에 포함하지 않습니다. `--apply`를 지정해야 실제 삭제합니다.
+정리 범위는 이 저장소의 `.test-output/integration-*` 중 완료가 확인된 이전 실행 폴더뿐입니다. 최근 3개와 24시간 이내 결과를 보존하며, 실행 중인 프로세스·링크/정션·출처를 확인할 수 없는 폴더는 건너뜁니다. 새 실행에는 상태 마커를 기록하고 이전 성공 실행은 결과 보고서로 확인합니다. 프로젝트 코드·배포 파일·전용 Copilot 로그인 프로필과 상위 `.playwright-mcp` 기록은 이 명령의 정리 범위에 포함하지 않습니다. `--apply`를 지정해야 실제 삭제합니다. 계획 단계에서 후보 트리를 한 번씩 검사하고, 삭제 직전에는 보존 정책·현재 실행 목록을 갱신한 뒤 해당 대상의 트리와 완료 상태만 다시 확인합니다. 다른 후보 트리는 반복 순회하지 않습니다. 폴더 식별 정보가 바뀌거나 다시 실행 중이 된 대상은 삭제하지 않으며, 결과에 삭제한 파일 크기 합계(`removedBytes`)를 표시합니다.
 
 무제한 루프 정책 단위 테스트는 메모리 데이터로 100회를 넘는 요청을 검증합니다. 실제 파일 읽기·해시·삭제·복원과 브라우저 UI 검증은 별도 실제 I/O 테스트를 유지합니다.
 

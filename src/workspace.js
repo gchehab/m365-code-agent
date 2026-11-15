@@ -8,8 +8,11 @@ const ignore = require('ignore');
 /** @typedef {import('../types/contracts').PreparedChange} PreparedChange */
 /** @typedef {import('../types/contracts').DirectorySnapshot} DirectorySnapshot */
 
+/** @param {string} text */
 const digest = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+/** @param {Uint8Array} bytes */
 const digestBytes = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+/** @param {Buffer} buffer */
 function decodeText(buffer) {
   const encoding =
     buffer[0] === 0xff && buffer[1] === 0xfe
@@ -104,10 +107,13 @@ class WorkspaceStore {
   async listFiles(limit = 250, directory = '') {
     if (directory === '.' || directory === './') directory = '';
     limit = Math.max(1, Math.min(Number(limit) || 250, 1000));
+    /** @type {string[]} */
     const files = [];
     let truncated = false;
+    /** @param {string} directory @param {string} [prefix] */
     const walk = async (directory, prefix = '') => {
       const entries = await fs.readdir(directory, { withFileTypes: true });
+      /** @param {import('node:fs').Dirent} entry */
       const priority = (entry) =>
         entry.isDirectory() ? (/^(src|app|lib|server|client)$/i.test(entry.name) ? 1 : 2) : 0;
       entries.sort((a, b) => priority(a) - priority(b) || a.name.localeCompare(b.name));
@@ -210,10 +216,13 @@ class WorkspaceStore {
       stat = await fs.stat(root.target);
     if (!stat.isDirectory()) throw new Error('folder_info에는 프로젝트 안의 폴더 경로가 필요합니다.');
     const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-    const files = [],
-      directories = [];
+    /** @type {DirectorySnapshot['files']} */
+    const files = [];
+    /** @type {string[]} */
+    const directories = [];
     let size = 0,
       count = 0;
+    /** @param {string} relative */
     const walk = async (relative) => {
       if (cancelled()) throw new Error('작업을 중지했습니다.');
       const resolved = await this.resolve(relative);
@@ -343,6 +352,7 @@ class WorkspaceStore {
     this.editReads.set(file.path, observed);
     return result;
   }
+  /** @param {string} query @param {string | string[]} [paths] */
   async search(query, paths) {
     if (typeof query !== 'string' || !query || query.length > 200)
       throw new Error('검색어는 1~200자여야 합니다.');
@@ -424,7 +434,13 @@ class WorkspaceStore {
                 ...snapshot.directories.map((name) => name + '/'),
                 ...snapshot.files.map((item) => item.path),
               ].join('\n'),
-            directorySnapshot: snapshot,
+            directorySnapshot: {
+              ...snapshot,
+              files: snapshot.files.map((file) => {
+                if (!Buffer.isBuffer(file.bytes)) throw new Error('폴더 삭제 원본 바이트 백업이 없습니다.');
+                return { ...file, bytes: file.bytes };
+              }),
+            },
             expectedHash: snapshot.hash,
             expectedDiskHash: snapshot.hash,
           });
@@ -469,6 +485,7 @@ class WorkspaceStore {
         });
         continue;
       }
+      /** @type {{path: string, hash: string, content: string} | null} */
       let original = null;
       let content = 'content' in file ? file.content : '';
       if (file.action === 'create') {
@@ -496,7 +513,9 @@ class WorkspaceStore {
           throw new Error('부분 수정은 1~20개의 oldText/newText 쌍이어야 합니다.');
         const crlf =
           original.content.includes('\r\n') && !original.content.replace(/\r\n/g, '').includes('\n');
+        /** @param {string} text */
         const eol = (text) => (crlf ? text.replace(/\r?\n/g, '\r\n') : text);
+        const observedContent = original.content;
         const spans = file.edits
           .map((edit) => {
             if (
@@ -512,8 +531,8 @@ class WorkspaceStore {
               newText = eol(edit.newText);
             if (!observed.chunks.some((chunk) => chunk.includes(oldText)))
               throw new Error('수정할 oldText가 읽은 범위에 없습니다. 해당 줄을 먼저 읽으세요.');
-            const start = original.content.indexOf(oldText);
-            if (start < 0 || original.content.indexOf(oldText, start + 1) >= 0)
+            const start = observedContent.indexOf(oldText);
+            if (start < 0 || observedContent.indexOf(oldText, start + 1) >= 0)
               throw new Error('oldText는 파일에서 정확히 한 번 나타나야 합니다. 앞뒤 문맥을 더 포함하세요.');
             return { start, end: start + oldText.length, text: newText };
           })

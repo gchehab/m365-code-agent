@@ -1,5 +1,9 @@
 import { normalizeToolCall } from '../src/tool-call';
 import type { ChangeProposal, PreparedChange, ToolCall } from '../types/contracts';
+import type { DirectoryBackup } from '../types/contracts';
+import { ChangeController } from '../src/changes';
+import { CodingAgent } from '../src/agent';
+import type { WorkspaceStore } from '../src/workspace';
 
 const call: ToolCall = normalizeToolCall({ name: 'read_file', path: 'main.js' });
 call.path?.toUpperCase();
@@ -17,3 +21,28 @@ function inspectPrepared(change: PreparedChange) {
 void badDelete;
 void incompleteReplace;
 void inspectPrepared;
+
+function checkExecution(
+  controller: ChangeController,
+  store: WorkspaceStore,
+  changes: PreparedChange[],
+  backup: DirectoryBackup,
+) {
+  // @ts-expect-error Review policy is a boolean, not model text.
+  controller.stageAndApply(store, changes, 'review', 'approve');
+  // @ts-expect-error Restore backups cannot contain an entry without original bytes.
+  backup.files = [{ path: 'image.bin', hash: 'hash', size: 1 }];
+  new CodingAgent({
+    store,
+    emit() {},
+    transport: {
+      async stop() {},
+      async request() {
+        return { kind: 'done', message: 'ok' };
+      },
+    },
+    // @ts-expect-error Request limits must be numeric; unlimited is a separate option.
+    maxRounds: 'unlimited',
+  });
+}
+void checkExecution;

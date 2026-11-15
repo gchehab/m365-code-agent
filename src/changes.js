@@ -1,9 +1,13 @@
+// @ts-check
 'use strict';
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { digest } = require('./workspace');
 const { requiresReview } = require('./policy');
+/** @typedef {import('../types/contracts').PreparedChange} PreparedChange */
+/** @typedef {import('./workspace').WorkspaceStore} WorkspaceStore */
+/** @param {string} target */
 async function exists(target) {
   try {
     await fs.lstat(target);
@@ -15,10 +19,12 @@ async function exists(target) {
 }
 
 class ChangeController {
+  /** @param {import('../types/contracts').ChangeHost} host @param {typeof import('vscode')} vscode */
   constructor(host, vscode) {
     this.host = host;
     this.vscode = vscode;
   }
+  /** @param {PreparedChange[]} changes */
   assertNoDirtyDeletions(changes) {
     for (const change of changes.filter((change) => change.action === 'delete')) {
       const target = path.resolve(change.target).toLowerCase();
@@ -35,6 +41,7 @@ class ChangeController {
         throw new Error(`저장하지 않은 변경이 있는 파일은 삭제·복원하지 않습니다: ${change.path}`);
     }
   }
+  /** @param {WorkspaceStore} store @param {PreparedChange[]} changes */
   recordCheckpoint(store, changes) {
     const host = this.host;
     host.checkpoints.push({ store, changes });
@@ -51,7 +58,9 @@ class ChangeController {
     host.checkpoints = host.checkpoints.slice(-20);
     host.post({ type: 'undoState', available: true });
   }
+  /** @param {WorkspaceStore} store @param {PreparedChange[]} changes */
   async preservePartialDeletes(store, changes) {
+    /** @type {PreparedChange[]} */
     const missing = [];
     for (const change of changes.filter((change) => change.action === 'delete')) {
       try {
@@ -90,6 +99,7 @@ class ChangeController {
     if (missing.length) this.recordCheckpoint(store, missing);
     return missing.length;
   }
+  /** @param {string} command @param {string} root */
   async runCommand(command, root, autoApprove = false) {
     const host = this.host;
     if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command))
@@ -128,6 +138,7 @@ class ChangeController {
     host.runner.encoding = host.config().get('commandOutputEncoding', 'utf8');
     return host.runner.run(command, root, (text) => host.output.append(text));
   }
+  /** @param {WorkspaceStore} store @param {PreparedChange[]} changes @param {string} summary @param {boolean} review */
   async stageAndApply(store, changes, summary, review, autoApprove = false) {
     const host = this.host;
     const vscode = this.vscode;
@@ -144,7 +155,10 @@ class ChangeController {
       change.previewId = id;
       host.previews.set(id + '-old', change.original);
       host.previews.set(id + '-new', change.content);
-      if (host.previews.size > 200) host.previews.delete(host.previews.keys().next().value);
+      if (host.previews.size > 200) {
+        const oldest = host.previews.keys().next().value;
+        if (oldest !== undefined) host.previews.delete(oldest);
+      }
     }
     const viewData = {
       type: 'changes',
@@ -153,9 +167,14 @@ class ChangeController {
         path: change.path,
         action: change.action,
         id: change.previewId,
-        binary: change.binary,
+        binary: change.action === 'delete' && !change.directory ? change.binary : undefined,
         directory: change.directory === true,
-        size: change.originalBytes?.length ?? change.directorySnapshot?.size,
+        size:
+          change.action === 'delete'
+            ? change.directory
+              ? change.directorySnapshot.size
+              : change.originalBytes.length
+            : undefined,
       })),
       review,
       autoApproved: autoApprove === true,
@@ -176,9 +195,10 @@ class ChangeController {
       if (!approved || host.stopRequested || host.agent?.cancelled) return false;
     } else host.post(viewData);
     if (host.stopRequested || host.agent?.cancelled) return false;
-    await store.verifyChanges(changes, () => host.stopRequested || host.agent?.cancelled);
+    await store.verifyChanges(changes, () => !!(host.stopRequested || host.agent?.cancelled));
     const edit = new vscode.WorkspaceEdit();
     const documents = [];
+    /** @type {string[]} */
     const directoryDeletes = [];
     let hasFileEdits = false;
     for (const change of changes) {
@@ -216,7 +236,7 @@ class ChangeController {
       if (!change.directory) hasFileEdits = true;
       documents.push({ uri, change });
     }
-    await store.verifyChanges(changes, () => host.stopRequested || host.agent?.cancelled);
+    await store.verifyChanges(changes, () => !!(host.stopRequested || host.agent?.cancelled));
     if (host.stopRequested || host.agent?.cancelled) return false;
     this.assertNoDirtyDeletions(changes);
     let applied, applyError;
@@ -244,6 +264,7 @@ class ChangeController {
     }
     if (!applied) {
       const partial = await this.preservePartialDeletes(store, changes);
+      /** @type {Error & { code?: string }} */
       const error = new Error(
         `VS Code가 변경을 완료하지 못했습니다.${partial ? ' 부분 삭제 ' + partial + '건의 백업을 보관했습니다. 되돌리기로 복원할 수 있습니다.' : ' 편집기에서 파일 상태를 확인하세요.'}`,
         { cause: applyError },
@@ -298,7 +319,7 @@ class ChangeController {
       await checkpoint.store.resolve(change.path, change.action === 'delete');
       const uri = vscode.Uri.file(change.target);
       if (change.action === 'delete') {
-        if (!change.partialDirectory && (await exists(change.target)))
+        if ((!change.directory || !change.partialDirectory) && (await exists(change.target)))
           throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
         if (change.directory) {
           if (change.partialDirectory) {

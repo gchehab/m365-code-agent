@@ -49,6 +49,18 @@ test('folder inspection stops during scanning without granting a deletion hash',
   assert.equal(store.directoryReads.has('old'), false);
 });
 
+test('folder deletion refuses an incomplete byte backup before applying any deletion', async t => {
+  const { root, store } = await fixture(t), info = await store.folderInfo('old');
+  const original = store.loadDirectory.bind(store);
+  t.mock.method(store, 'loadDirectory', async (...args) => {
+    const snapshot = await original(...args);
+    if (args[1] === true) delete snapshot.files[0].bytes;
+    return snapshot;
+  });
+  await assert.rejects(store.prepareChanges([{ path: info.path, action: 'delete', baseHash: info.hash }]), /바이트 백업/);
+  assert.equal(await fs.readFile(path.join(root, 'old/a.js'), 'utf8'), 'old\n');
+});
+
 test('folder deletion recovery explicitly records folder_info while file_info remains file-only', async t => {
   const { store } = await fixture(t); let requests = 0;
   await assert.rejects(store.fileInfo('old'), /folder_info/);

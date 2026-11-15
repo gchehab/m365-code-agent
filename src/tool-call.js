@@ -17,10 +17,17 @@ function normalizeToolCall(value) {
   const name = value.name || nested.name;
   if (typeof name !== 'string' || !name.trim()) throw new Error('도구 이름이 없는 요청입니다.');
   let args = value.arguments ?? value.parameters ?? value.args ?? nested.arguments ?? {};
-  if (typeof args === 'string') args = JSON.parse(args);
+  if (typeof args === 'string') {
+    try {
+      args = JSON.parse(args);
+    } catch (cause) {
+      throw new Error('도구 인자의 JSON 형식이 올바르지 않습니다.', { cause });
+    }
+  }
   if (!isRecord(args)) throw new Error('도구 인자가 객체가 아닙니다.');
   /** @type {ToolCall} */
   const result = { name };
+  /** @param {string} key @param {string | undefined} alias */
   const argument = (key, alias) => value[key] ?? args[key] ?? (alias ? args[alias] : undefined);
   for (const key of /** @type {const} */ (['path', 'query', 'command'])) {
     const entry = argument(key, key === 'path' ? 'file_path' : undefined);

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.1
+
+- Extend JSDoc checking to change application/undo and the agent loop. Enable noImplicitAny, add typed host/transport/approval contracts and check VS Code calls against the minimum supported API types.
+- Require original byte buffers in folder restore backups; reject incomplete backup construction before deletion. Add compile-time regression cases for restore data, approval policy and request limits.
+- Optimize cleanup: refresh only top-level retention metadata before each deletion, then revalidate the selected tree and ownership. Preserve replaced/active targets and report logical file bytes removed. Test that each candidate tree is visited twice instead of rescanning all trees per deletion.
+- Wrap malformed tool-argument JSON in a Korean error while retaining its syntax cause. Split remaining chat/response HTML templates into readable lines.
+- Verify full Node tests and actual VS Code integration; keep cleanups restricted to completed integration output, retaining recent runs and links/unknown output.
+
 ## 0.13.0
 
 - Make file_info strictly file-only. Folder deletion requires explicit folder_info evidence; host-driven proposal recovery selects and records the matching file/folder tool.

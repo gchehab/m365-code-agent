@@ -1,9 +1,16 @@
+// @ts-check
 'use strict';
 const { buildPrompt, newId, normalizeToolCall, toolCallLimit } = require('./protocol');
 const { inspectProject } = require('./project');
 const { TaskProgress } = require('./task-progress');
+/** @param {string | undefined} value @param {string} field @returns {string} */
+function requiredText(value, field) {
+  if (typeof value !== 'string' || !value) throw new Error(`${field} 문자열이 필요합니다.`);
+  return value;
+}
 
 class CodingAgent {
+  /** @param {import('../types/contracts').AgentOptions} options */
   constructor({
     store,
     transport,
@@ -18,20 +25,18 @@ class CodingAgent {
     maxRounds = 100,
     maxPromptCharacters = 12000,
   }) {
-    Object.assign(this, {
-      store,
-      transport,
-      approveAndApply,
-      runCommand,
-      emit,
-      conversation,
-      mode,
-      intent,
-      autoApprove: autoApprove === true,
-      unlimitedRounds: unlimitedRounds === true,
-      maxRounds: Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100,
-      maxPromptCharacters,
-    });
+    this.store = store;
+    this.transport = transport;
+    this.approveAndApply = approveAndApply;
+    this.runCommand = runCommand;
+    this.emit = emit;
+    this.conversation = conversation;
+    this.mode = mode;
+    this.intent = intent;
+    this.autoApprove = autoApprove === true;
+    this.unlimitedRounds = unlimitedRounds === true;
+    this.maxRounds = Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100;
+    this.maxPromptCharacters = maxPromptCharacters;
     this.cancelled = false;
     this.running = false;
   }
@@ -39,12 +44,14 @@ class CodingAgent {
     this.cancelled = true;
     await this.transport.stop();
   }
+  /** @param {string} task */
   async run(task, extraContext = '') {
     if (this.running) throw new Error('이미 진행 중인 작업이 있습니다.');
     if (typeof task !== 'string' || !task.trim() || task.length > 8000)
       throw new Error('요청은 1~8,000자로 입력하세요.');
     this.running = true;
     this.cancelled = false;
+    /** @type {import('../types/contracts').HistoryEntry[]} */
     const history = this.conversation
       .slice(-12)
       .map((event) => ({ role: event.role, text: event.text.slice(0, 4000) }));
@@ -83,6 +90,7 @@ class CodingAgent {
           type: 'status',
           text: `요청 ${round}회 · ${this.unlimitedRounds ? '무제한' : '안전 한도 ' + this.maxRounds + '회'} · Copilot 요청 준비`,
         });
+        /** @type {import('../types/contracts').AgentReply | undefined} */
         let reply;
         for (let attempt = 0; attempt < 3; attempt++) {
           const prompt = buildPrompt({
@@ -120,6 +128,7 @@ class CodingAgent {
           }
         }
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
+        if (!reply) throw new Error('Copilot 응답을 받지 못했습니다.');
         if (reply.kind === 'done') {
           this.emit({ type: 'message', role: 'assistant', text: reply.message });
           this.emit({
@@ -135,6 +144,7 @@ class CodingAgent {
               type: 'status',
               text: '도구 요청을 먼저 처리합니다. 함께 온 수정안은 도구 결과 확인 뒤 다시 받습니다.',
             });
+          /** @type {import('../types/contracts').ToolObservation[]} */
           const observations = [];
           let fresh = false;
           const batchLimit = toolCallLimit(promptBudget);
@@ -152,30 +162,32 @@ class CodingAgent {
             const label = `${call.name} · ${call.path || call.query || call.command || '프로젝트'}`;
             this.emit({ type: 'tool', id: toolId, label, state: 'running' });
             try {
+              /** @type {import('../types/contracts').ToolResult} */
               let result;
               const resultBudget = Math.max(
                 256,
                 Math.min(6000, Math.floor((promptBudget - 3500) / Math.min(batchLimit, reply.calls.length))),
               );
               if (call.name === 'read_file')
-                result = await this.store.readFile(call.path, {
+                result = await this.store.readFile(requiredText(call.path, 'path'), {
                   startLine: call.startLine,
                   startColumn: call.startColumn,
                   lineCount: call.lineCount,
                   maxCharacters: resultBudget,
                 });
               else if (call.name === 'file_info')
-                result = await this.store.fileInfo(call.path, () => this.cancelled);
+                result = await this.store.fileInfo(requiredText(call.path, 'path'), () => this.cancelled);
               else if (call.name === 'folder_info')
-                result = await this.store.folderInfo(call.path, () => this.cancelled);
+                result = await this.store.folderInfo(requiredText(call.path, 'path'), () => this.cancelled);
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit, call.path);
-              else if (call.name === 'search_text') result = await this.store.search(call.query, call.paths);
+              else if (call.name === 'search_text')
+                result = await this.store.search(requiredText(call.query, 'query'), call.paths);
               else if (call.name === 'run_command') {
                 if (this.mode !== 'agent' || !this.runCommand)
                   throw new Error(
                     '이번 요청은 읽기 전용 분석입니다. 명령 실행이 필요하면 실행할 작업을 요청하세요.',
                   );
-                result = await this.runCommand(call.command);
+                result = await this.runCommand(requiredText(call.command, 'command'));
               } else throw new Error('지원하지 않는 도구입니다.');
               if (Array.isArray(result.files))
                 while (JSON.stringify(result).length > resultBudget && result.files.length > 1) {
@@ -206,7 +218,7 @@ class CodingAgent {
                 detail:
                   typeof result.content === 'string'
                     ? `${result.content.length.toLocaleString()}자 읽음 · ${result.startLine}~${result.endLine}줄`
-                    : ['file_info', 'folder_info'].includes(call.name)
+                    : ['file_info', 'folder_info'].includes(call.name) && result.size !== undefined
                       ? `${result.size.toLocaleString()} bytes · 파일 해시 확인`
                       : result.approved === false
                         ? '실행 거절됨'
@@ -247,6 +259,7 @@ class CodingAgent {
                 change.content !== change.original,
             );
             if (!changes.length) {
+              /** @type {Error & { code?: string }} */
               const error = new Error(
                 '수정안이 현재 파일과 동일합니다. 새 변경 없이 완료한 파일을 다시 적용하지 마세요.',
               );
@@ -258,6 +271,7 @@ class CodingAgent {
               role: 'assistant',
               text: reply.summary || '파일 수정안을 준비했습니다.',
             });
+            if (!this.approveAndApply) throw new Error('파일 변경 적용기가 연결되지 않았습니다.');
             const applied = await this.approveAndApply(changes, reply.summary || '파일 수정안');
             if (applied) {
               appliedFiles += changes.length;
@@ -296,6 +310,7 @@ class CodingAgent {
               ]
                 .filter((file) => !progress.repaired.has(file))
                 .slice(0, 2);
+              /** @type {import('../types/contracts').ToolObservation[]} */
               const observations = [];
               for (const path of paths) {
                 if (this.cancelled) throw new Error('작업을 중지했습니다.', { cause: error });
@@ -307,6 +322,7 @@ class CodingAgent {
                   ? { name: 'file_info', path }
                   : { name: 'read_file', path, startLine: 1, lineCount: 120 };
                 try {
+                  /** @type {import('../types/contracts').ToolResult} */
                   const result = deleting
                     ? await this.store.deletionInfo(path, () => this.cancelled)
                     : await this.store.readFile(path, {
@@ -325,7 +341,7 @@ class CodingAgent {
                     id,
                     label: '수정 대상 자동 확인 · ' + path,
                     state: 'done',
-                    detail: `${deleting ? result.size + ' bytes' : result.content.length + '자'} · 실제 hash 확인. 검증한 새 수정안을 요청합니다.`,
+                    detail: `${deleting ? result.size + ' bytes' : (result.content || '').length + '자'} · 실제 hash 확인. 검증한 새 수정안을 요청합니다.`,
                   });
                 } catch (readError) {
                   observations.push({ call, error: readError.message });

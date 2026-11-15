@@ -5,6 +5,49 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { cleanTestOutput } = require('../scripts/clean-test-output.cjs');
 
+async function cleanupFixture(t) {
+  const output = path.resolve(__dirname, '..', '.test-output');
+  const repo = await fs.mkdtemp(path.join(output, 'cleanup-fixture-'));
+  t.after(async () => { assert.equal(path.dirname(repo), output); await fs.rm(repo, { recursive: true, force: true }); });
+  const root = path.join(repo, '.test-output'); await fs.mkdir(root);
+  const run = async (name, hours) => {
+    const target = path.join(root, name); await fs.mkdir(target);
+    await fs.writeFile(path.join(target, '.m365-test-run.json'), JSON.stringify({kind: 'm365-code-agent-integration', state: 'finished', pid: 2147483647}));
+    await fs.writeFile(path.join(target, 'payload.bin'), 'payload');
+    const time = new Date(Date.now() - hours * 3600000); await fs.utimes(target, time, time);
+    return target;
+  };
+  return { repo, run };
+}
+
+test('cleanup visits each selected tree only during planning and its own final validation', async t => {
+  const { repo, run } = await cleanupFixture(t), counts = new Map();
+  await run('integration-new', 0);
+  for (const name of ['a', 'b', 'c']) await run('integration-' + name, 72);
+  const realpath = fs.realpath.bind(fs);
+  t.mock.method(fs, 'realpath', async target => {
+    if (path.basename(target) === 'payload.bin') counts.set(target, (counts.get(target) || 0) + 1);
+    return realpath(target);
+  });
+  const result = await cleanTestOutput(repo, { keep: 1, apply: true });
+  assert.equal(result.removed.length, 3); assert.equal(result.removedBytes, result.candidateBytes);
+  assert.equal(counts.size, 3); assert.ok([...counts.values()].every(count => count === 2));
+});
+
+test('cleanup rechecks ownership of its target and keeps a run that becomes active after planning', async t => {
+  const { repo, run } = await cleanupFixture(t);
+  await run('integration-new', 0); const target = await run('integration-old', 72);
+  const realpath = fs.realpath.bind(fs);
+  t.mock.method(fs, 'realpath', async entry => {
+    const value = await realpath(entry);
+    if (entry === path.join(target, 'payload.bin')) await fs.writeFile(path.join(target, '.m365-test-run.json'), JSON.stringify({kind: 'm365-code-agent-integration', state: 'running', pid: process.pid}));
+    return value;
+  });
+  const result = await cleanTestOutput(repo, { keep: 1, apply: true });
+  assert.deepEqual(result.removed, []); assert.equal(result.removedBytes, 0);
+  assert.equal(await fs.readFile(path.join(target, 'payload.bin'), 'utf8'), 'payload');
+});
+
 test('test-output cleanup defaults to dry run and retains recent, running, unknown and linked folders', async t => {
   const output = path.resolve(__dirname, '..', '.test-output');
   const repo = await fs.mkdtemp(path.join(output, 'cleanup-fixture-'));

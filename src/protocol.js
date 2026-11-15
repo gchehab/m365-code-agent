@@ -96,6 +96,7 @@ function parseReply(text, expectedId) {
 function toolCallLimit(maxCharacters = 12000) {
   return Math.max(1, Math.min(4, Math.floor((maxCharacters - 3500) / 4000)));
 }
+/** @param {{id: string, task: string, workspace: string, files?: unknown, history?: import('../types/contracts').HistoryEntry[], extraContext?: unknown, mode?: string, intent?: string, autoApprove?: boolean, progress?: object, maxCharacters?: number}} options */
 function buildPrompt({
   id,
   task,

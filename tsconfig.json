@@ -4,7 +4,7 @@
     "checkJs": false,
     "noEmit": true,
     "strict": true,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "useUnknownInCatchVariables": false,
     "skipLibCheck": true,
     "target": "ES2022",
@@ -12,5 +12,11 @@
     "moduleResolution": "Node16",
     "types": ["node"]
   },
-  "files": ["src/workspace.js", "src/tool-call.js", "test/contracts.typecheck.ts"]
+  "files": [
+    "src/workspace.js",
+    "src/tool-call.js",
+    "src/changes.js",
+    "src/agent.js",
+    "test/contracts.typecheck.ts"
+  ]
 }
