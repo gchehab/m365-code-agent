@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.2
+
+- Restore the unchanged dependency lock entries after a release-version edit incorrectly altered the retry dependency. Only the extension root version changes; clean dependency installation is verified in CI. Runtime functionality is the same as 0.12.1.
+
 ## 0.12.1
 
 - Keep file/folder classification host-controlled. Ignore a model-supplied directory flag on ordinary create/edit/replace proposals so valid file changes cannot be skipped as folder-only operations.
