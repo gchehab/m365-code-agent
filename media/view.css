@@ -92,9 +92,12 @@ body.reader { height: auto; min-height: 100vh; overflow: auto; padding: 0 28px 4
 
 summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; border-radius: 3px; }
 
-#approvalMode { float: right; font-size: 10px; color: var(--vscode-descriptionForeground); }
+#approvalMode { font-size: 10px; color: var(--vscode-descriptionForeground); }
 #approvalMode.auto-apply { color: var(--vscode-editorWarning-foreground,var(--vscode-errorForeground)); }
 
-.auto-approve-option { display: flex; align-items: center; gap: 5px; font-size: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border); }
+.auto-approve-option, .request-limit-option { display: flex; align-items: center; gap: 5px; font-size: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border); }
 .option-note { color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.5; margin: 5px 0; }
 #form.auto-approval { border-color: var(--vscode-editorWarning-foreground,var(--vscode-focusBorder)); }
+
+.option-badges { float: right; display: inline-flex; align-items: center; gap: 6px; }
+#roundMode { font-size: 10px; color: var(--vscode-textLink-foreground); }

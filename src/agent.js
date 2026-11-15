@@ -4,8 +4,8 @@ const { inspectProject } = require('./project');
 const { TaskProgress } = require('./task-progress');
 
 class CodingAgent {
-  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', intent, autoApprove = false, maxRounds = 100, maxPromptCharacters = 12000 }) {
-    Object.assign(this, { store, transport, approveAndApply, runCommand, emit, conversation, mode, intent, autoApprove: autoApprove === true, maxRounds: Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100, maxPromptCharacters });
+  constructor({ store, transport, approveAndApply, runCommand, emit, conversation = [], mode = 'agent', intent, autoApprove = false, unlimitedRounds = false, maxRounds = 100, maxPromptCharacters = 12000 }) {
+    Object.assign(this, { store, transport, approveAndApply, runCommand, emit, conversation, mode, intent, autoApprove: autoApprove === true, unlimitedRounds: unlimitedRounds === true, maxRounds: Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100, maxPromptCharacters });
     this.cancelled = false;
     this.running = false;
   }
@@ -26,15 +26,16 @@ class CodingAgent {
       history.push(project.history);
       if (project.discovered && !project.read) throw new Error('프로젝트 파일 본문을 읽지 못했습니다. 작업 기록의 파일별 오류를 확인하세요. 분석이나 수정이 완료된 것으로 처리하지 않았습니다.');
       this.emit({ type: 'message', role: 'system', text: `프로젝트 ${require('node:path').basename(this.store.root)} · ${project.discovered}개 파일 발견 · ${project.read}개 본문을 먼저 읽었습니다.${this.mode !== 'agent' ? ' 이번 요청은 분석·계획으로 처리하며 파일을 수정하지 않습니다.' : ''}` });
-      for (let round = 1; round <= this.maxRounds; round++) {
+      for (let round = 1; this.unlimitedRounds || round <= this.maxRounds; round++) {
         if (this.cancelled) throw new Error('작업을 중지했습니다.');
         const id = newId();
-        this.emit({ type: 'progress', round, total: this.maxRounds, remaining: this.maxRounds - round });
-        this.emit({ type: 'status', text: `요청 ${round}회 · 안전 한도 ${this.maxRounds}회 · Copilot 요청 준비` });
+        const limit = this.unlimitedRounds ? null : this.maxRounds;
+        this.emit({ type: 'progress', round, total: limit, remaining: this.unlimitedRounds ? null : this.maxRounds - round, unlimited: this.unlimitedRounds });
+        this.emit({ type: 'status', text: `요청 ${round}회 · ${this.unlimitedRounds ? '무제한' : '안전 한도 ' + this.maxRounds + '회'} · Copilot 요청 준비` });
         let reply;
         for (let attempt = 0; attempt < 3; attempt++) {
           const prompt = buildPrompt({ id, task, workspace: require('node:path').basename(this.store.root), files,
-            history, extraContext, mode: this.mode, intent: this.intent, autoApprove: this.autoApprove, progress: progress.snapshot(round, this.maxRounds, appliedFiles), maxCharacters: promptBudget });
+            history, extraContext, mode: this.mode, intent: this.intent, autoApprove: this.autoApprove, progress: progress.snapshot(round, limit, appliedFiles), maxCharacters: promptBudget });
           try {
             reply = await this.transport.request(prompt, id, text => this.emit({ type: 'status', text }));
             break;

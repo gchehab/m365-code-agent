@@ -235,6 +235,7 @@ class AgentView {
       if (JSON.stringify(contextFiles).length > 24000) throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
       const { task, mode, intent } = resolveTask(message.task);
       const autoApprove = message.autoApprove === true;
+      const unlimitedRounds = message.unlimitedRounds === true;
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.saveSession();
       if (browser.waitForComposer && browser.context) {
@@ -247,7 +248,7 @@ class AgentView {
       }
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
       this.agent = new CodingAgent({ store, transport: browser, emit: event => this.post(event),
-        mode, intent, autoApprove, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
+        mode, intent, autoApprove, unlimitedRounds, conversation: this.events.filter(event => event.type === 'message' && ['user', 'assistant'].includes(event.role)),
         maxRounds: this.config().get('maxRounds'), maxPromptCharacters: this.config().get('maxPromptCharacters'),
         runCommand: command => this.runCommand(command, folder.uri.fsPath, autoApprove),
         approveAndApply: (changes, summary) => this.stageAndApply(store, changes, summary, Boolean(message.review), autoApprove) });

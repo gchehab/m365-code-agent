@@ -10,11 +10,11 @@ const { decorate } = require('../src/markdown');
 const root = path.resolve(__dirname, '..');
 const theme = ':root{--vscode-foreground:#ddd;--vscode-editor-background:#1e1e1e;--vscode-sideBar-background:#181818;--vscode-input-background:#252526;--vscode-input-foreground:#ddd;--vscode-descriptionForeground:#aaa;--vscode-panel-border:#393939;--vscode-focusBorder:#569cd6;--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-secondaryBackground:#333;--vscode-button-secondaryForeground:#ddd;--vscode-errorForeground:#f88;--vscode-font-family:Segoe UI,sans-serif;--vscode-editor-font-family:Consolas,monospace;--vscode-textLink-foreground:#79b8ff}';
 const reply = '## 빈 배열 처리\n\n**원인:** 빈 배열에서 평균을 계산하면 `NaN`이 반환됩니다. 입력값을 먼저 확인하도록 수정했습니다.\n\n```javascript\nconst average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;\n```\n\n### 검증 결과\n\n- 빈 배열은 `null`을 반환합니다.\n- 일반 배열은 기존 결과를 유지합니다.\n\n| 입력 | 결과 |\n| --- | --- |\n| `[]` | `null` |\n| `[1, 2, 3]` | `2` |';
-async function fixture(t, html, width = 360) {
+async function fixture(t, html, width = 360, initialState = {}) {
   const browser = await chromium.launch({ channel: 'msedge', headless: true }); t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width, height: 820 } });
   const errors = []; page.on('pageerror', error => errors.push(error)); t.after(() => assert.deepEqual(errors, []));
-  await page.addInitScript(() => { window.sent = []; window.saved = {}; window.acquireVsCodeApi = () => ({ getState: () => window.saved, setState: value => { window.saved = value; }, postMessage: message => window.sent.push(message) }); });
+  await page.addInitScript(state => { window.sent = []; window.saved = state; window.acquireVsCodeApi = () => ({ getState: () => window.saved, setState: value => { window.saved = value; }, postMessage: message => window.sent.push(message) }); }, initialState);
   await page.route('https://reading.test/**', async route => {
     const file = new URL(route.request().url()).pathname.slice(1);
     await route.fulfill({ contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8', body: file ? (file.endsWith('.css') ? theme : '') + await fs.readFile(path.join(root, 'media', file), 'utf8') : html });
@@ -112,6 +112,7 @@ test('response panel reuses one read-only editor and routes clipboard acknowledg
 test('automatic approval is off by default, visible when selected, and snapshotted into each submitted task', async t => {
   const { page, host } = await fixture(t, renderWebview(options));
   assert.equal(await page.locator('#autoApprove').isChecked(), false);
+  assert.equal(await page.locator('#unlimitedRounds').isChecked(), false);
   await page.locator('#task').fill('첫 요청'); await page.locator('#task').press('Enter');
   assert.equal((await page.evaluate(() => window.sent.filter(item => item.type === 'run').at(-1))).autoApprove, false);
   await host({ type: 'idle' });
@@ -132,5 +133,34 @@ test('automatic approval is off by default, visible when selected, and snapshott
   assert.equal(await page.locator('#review').isDisabled(), false);
   assert.equal(await page.locator('#review').isChecked(), true);
   assert.equal(await page.evaluate(() => window.saved.autoApprove), false);
+  for (const width of [280, 360]) { await page.setViewportSize({ width, height: 720 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); }
+});
+
+test('unlimited requests and automatic approval restore and submit as four independent choices', async t => {
+  const { page, host } = await fixture(t, renderWebview(options), 360, { unlimitedRounds: true, autoApprove: false });
+  assert.equal(await page.locator('#unlimitedRounds').isChecked(), true);
+  assert.equal(await page.locator('#autoApprove').isChecked(), false);
+  for (const [unlimited, automatic] of [[false, false], [true, false], [false, true], [true, true]]) {
+    await page.locator('#composerOptions > summary').click();
+    await page.locator('#unlimitedRounds').setChecked(unlimited);
+    await page.locator('#autoApprove').setChecked(automatic);
+    assert.equal(await page.locator('#review').isDisabled(), automatic);
+    await page.locator('#composerOptions > summary').click();
+    assert.equal(await page.locator('#roundMode').isVisible(), unlimited);
+    assert.equal(await page.locator('#approvalMode').textContent(), automatic ? '승인 없이 진행' : '승인 켜짐');
+    await page.locator('#task').fill('이 프로젝트를 분석해줘.'); await page.locator('#task').press('Enter');
+    const request = await page.evaluate(() => window.sent.filter(item => item.type === 'run').at(-1));
+    assert.equal(request.unlimitedRounds, unlimited); assert.equal(request.autoApprove, automatic);
+    assert.equal(await page.locator('#unlimitedRounds').isDisabled(), true);
+    assert.equal(await page.locator('#autoApprove').isDisabled(), true);
+    await host({ type: 'progress', round: 101, total: unlimited ? null : 150, remaining: unlimited ? null : 49, unlimited });
+    assert.equal(await page.locator('#roundProgress').textContent(), unlimited ? 'Copilot 요청 101회 · 무제한' : 'Copilot 요청 101회 · 안전 한도 150회');
+    await host({ type: 'idle' }); await host({ type: 'runResult', clientRequestId: request.clientRequestId, success: true });
+  }
+  assert.equal(await page.evaluate(() => window.saved.unlimitedRounds), true);
+  assert.equal(await page.evaluate(() => window.saved.autoApprove), true);
+  await page.locator('#composerOptions > summary').click();
+  await page.setViewportSize({ width: 360, height: 900 });
+  await page.screenshot({ path: path.join(root, '.test-output', 'unlimited-options-ui.png') });
   for (const width of [280, 360]) { await page.setViewportSize({ width, height: 720 }); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); }
 });

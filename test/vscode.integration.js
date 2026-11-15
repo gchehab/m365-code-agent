@@ -159,11 +159,37 @@ async function run() {
   assert.equal(await fs.readFile(path.join(root, 'automatic-result.txt'), 'utf8'), 'ok');
   assert.equal(automaticEvents.some(event => event.type === 'commandApproval' || (event.type === 'changes' && event.review)), false);
   assert.ok(automaticEvents.some(event => event.type === 'changes' && event.autoApproved));
+  assert.equal(provider.agent.unlimitedRounds, false, 'automatic approval does not enable unlimited requests');
   assert.equal(provider.pending, null);
   const subsequentManual = provider.runCommand('echo manual-approval-required', root);
   assert.equal(provider.pending.kind, 'command');
   await provider.handle({ type: 'rejectCommand', token: provider.pending.viewData.token });
   assert.equal((await subsequentManual).approved, false);
+  await provider.undo();
+  await assert.rejects(fs.access(path.join(root, 'package.json')));
+
+  // Unlimited requests alone cannot grant automatic approval, including execution settings.
+  const unlimitedEvents = [], beforeUnlimitedPost = provider.post;
+  provider.post = function (event) { unlimitedEvents.push(event); return beforeUnlimitedPost.call(this, event); };
+  let unlimitedRound = 0;
+  provider.browser.request = async prompt => {
+    const data = JSON.parse(prompt.split('DATA: ')[1]);
+    assert.equal(data.progress.unlimited, true); assert.equal(data.progress.limit, null);
+    assert.match(prompt, /Commands need user approval/);
+    if (++unlimitedRound === 1) return { kind: 'changes', summary: '무제한과 승인 설정 독립성 검증', files: [{ path: 'package.json', action: 'create', baseHash: null, content: '{"scripts":{"test":"echo reviewed"}}\n' }] };
+    return { kind: 'done', message: '승인 후 적용했습니다.' };
+  };
+  try {
+    const job = provider.start({ task: 'package.json을 만들어줘.', review: false, unlimitedRounds: true, includeEditor: false });
+    for (let tries = 0; !provider.pending && tries < 500; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(provider.pending?.kind, 'changes');
+    assert.ok(provider.pending.viewData.forcedReview.includes('package.json'));
+    assert.equal(provider.agent.autoApprove, false);
+    await provider.handle({ type: 'apply', token: provider.pending.viewData.token });
+    await job;
+  } finally { provider.post = beforeUnlimitedPost; }
+  assert.match(await fs.readFile(path.join(root, 'package.json'), 'utf8'), /reviewed/);
+  assert.ok(unlimitedEvents.some(event => event.type === 'progress' && event.unlimited && event.total === null && event.remaining === null));
   await provider.undo();
   await assert.rejects(fs.access(path.join(root, 'package.json')));
 
@@ -248,7 +274,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

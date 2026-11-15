@@ -18,7 +18,7 @@ class TaskProgress {
     this.recentTools = this.recentTools.slice(-4); return fresh;
   }
   recordChanges(changes) { this.revision++; for (const change of changes) this.changedFiles.add(change.path); }
-  snapshot(round, limit, appliedFiles) { return { taskId: this.id, round, limit, appliedFiles, noProgressRounds: this.stalls, changedFiles: [...this.changedFiles].slice(-4), recentTools: this.recentTools, ...(this.lastError ? { lastError: this.lastError.slice(0, 200) } : {}) }; }
+  snapshot(round, limit, appliedFiles) { return { taskId: this.id, round, limit, unlimited: limit === null, appliedFiles, noProgressRounds: this.stalls, changedFiles: [...this.changedFiles].slice(-4), recentTools: this.recentTools, ...(this.lastError ? { lastError: this.lastError.slice(0, 200) } : {}) }; }
   finishRound(fresh, history, appliedFiles) {
     this.stalls = fresh ? 0 : this.stalls + 1;
     if (!this.stalls) return;

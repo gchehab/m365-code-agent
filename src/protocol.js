@@ -86,7 +86,7 @@ function buildPrompt({ id, task, workspace, files, history = [], extraContext, m
   const payload = { task, workspace, mode, ...(progress ? { progress } : {}), ...(intent ? { intent } : {}), files: files || { files: [], truncated: false }, context, history: history.slice(-8) };
   // JSON escaping keeps multiline code intact in a single editor paragraph.
   const render = () => instructions + JSON.stringify(payload);
-  if (render().length > maxCharacters && payload.progress) payload.progress = { taskId: progress.taskId, round: progress.round, limit: progress.limit, appliedFiles: progress.appliedFiles, noProgressRounds: progress.noProgressRounds, lastError: progress.lastError };
+  if (render().length > maxCharacters && payload.progress) payload.progress = { taskId: progress.taskId, round: progress.round, limit: progress.limit, unlimited: progress.unlimited, appliedFiles: progress.appliedFiles, noProgressRounds: progress.noProgressRounds, lastError: progress.lastError };
   while (render().length > maxCharacters && payload.history.length > 1) payload.history.shift();
   if (payload.files && Array.isArray(payload.files.files)) {
     payload.files = { ...payload.files, files: [...payload.files.files] };

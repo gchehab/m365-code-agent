@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- Keep the default 100-request safety ceiling and add a separate, default-off **요청 횟수 무제한** option. Capture and lock the selected limit policy per task; retain it in VS Code view state.
+- Make unlimited requests independent of automatic approval, supporting all four combinations. Neither option grants the other.
+- Show the current request count with an unlimited label in progress/status and show the selected mode while options are collapsed. Serialize unlimited limits as null with an explicit flag in model progress.
+- Retain repeated-work detection, stop, completion/error handling, read-only modes and file validation. Verify more than 100 progressing rounds, repetition termination, cancellation, UI persistence and real VS Code approval isolation.
+
 ## 0.9.0
 
 - Raise the default per-task request safety ceiling to 100 (configurable up to 500); retain explicitly configured limits and stop unchanged work before the ceiling.
