@@ -73,6 +73,67 @@ test('disabled send button is awaited, and English accessible names are detected
   assert.equal((await transport.request('Current requestId: delayed', 'delayed')).kind, 'done');
 });
 
+test('generation controls disappearing between visibility and enabled checks reproduce the reported timeout and no longer abort requests', async t => {
+  const transport = await browserFixture(t, { responseStableMs: 50, composerStableMs: 50 });
+  transport.page.setDefaultTimeout(700);
+  await transport.page.evaluate(() => {
+    window.addVolatileStop = () => {
+      const button = document.createElement('button'); button.textContent = 'Stop generating'; document.body.append(button);
+      for (const name of ['getClientRects', 'getBoundingClientRect']) {
+        const original = button[name].bind(button);
+        button[name] = () => { const result = original(); queueMicrotask(() => button.remove()); return result; };
+      }
+    };
+    const original = document.createElement('button'); original.id = 'original-stop'; original.textContent = 'Stop generating'; document.body.append(original);
+  });
+  // Reproduce the previous code with a real node removal, not a mocked timeout.
+  const stale = (await transport.page.getByRole('button', { name: 'Stop generating', exact: true }).all())[0];
+  assert.equal(await stale.isVisible(), true);
+  await transport.page.locator('#original-stop').evaluate(button => button.remove());
+  await assert.rejects(stale.isEnabled(), /locator\.isEnabled: Timeout/);
+  await transport.page.evaluate(() => {
+    const send = document.querySelector('#send'), original = send.onclick;
+    window.submissions = 0; send.onclick = () => { window.submissions++; original(); window.addVolatileStop(); };
+  });
+  assert.equal((await transport.request('Current requestId: disappearing-stop', 'disappearing-stop')).kind, 'done');
+  assert.equal(await transport.page.evaluate(() => window.submissions), 1);
+  assert.equal(transport.lastSend.stage, 'confirmed');
+});
+
+test('an unsent send control can be replaced without waiting on a stale enabled locator or duplicating submission', async t => {
+  const transport = await browserFixture(t, { responseStableMs: 50, composerStableMs: 50, sendReadyTimeoutMs: 4000 });
+  transport.page.setDefaultTimeout(700);
+  await transport.page.evaluate(() => {
+    const button = document.querySelector('#send'), replacement = button.cloneNode(true), originalClick = button.onclick;
+    window.submissions = 0; replacement.onclick = () => { window.submissions++; originalClick(); };
+    let scheduled = false;
+    for (const name of ['getClientRects', 'getBoundingClientRect']) {
+      const original = button[name].bind(button);
+      button[name] = () => {
+        const result = original();
+        if (!scheduled) { scheduled = true; queueMicrotask(() => { const placeholder = document.createElement('div'); button.replaceWith(placeholder); setTimeout(() => placeholder.replaceWith(replacement), 900); }); }
+        return result;
+      };
+    }
+  });
+  assert.equal((await transport.request('Current requestId: replacing-send', 'replacing-send')).kind, 'done');
+  assert.equal(await transport.page.evaluate(() => window.submissions), 1);
+});
+
+test('a click error after dispatch still collects acknowledgement without a second click', async t => {
+  const transport = await browserFixture(t, { responseStableMs: 50, composerStableMs: 50 });
+  await transport.page.evaluate(() => { const send = document.querySelector('#send'), original = send.onclick; window.submissions = 0; send.onclick = () => { window.submissions++; original(); }; });
+  const find = transport.findSendButton.bind(transport);
+  transport.findSendButton = async (...args) => {
+    const handle = await find(...args);
+    if (handle) { const click = handle.click.bind(handle); handle.click = async options => { await click(options); if (!options.trial) throw new Error('Control detached after dispatch'); }; }
+    return handle;
+  };
+  assert.equal((await transport.request('Current requestId: post-click-error', 'post-click-error')).kind, 'done');
+  assert.equal(await transport.page.evaluate(() => window.submissions), 1);
+  assert.equal(transport.lastSend.stage, 'confirmed');
+});
+
 test('unavailable send button clears only the owned unsent draft', async t => {
   const transport = await browserFixture(t, { sendReadyTimeoutMs: 300 });
   await transport.page.locator('#send').evaluate(button => { button.disabled = true; });

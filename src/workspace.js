@@ -21,6 +21,7 @@ class WorkspaceStore {
     this.ledger = new Map();
     this.editReads = new Map();
     this.deleteReads = new Map();
+    this.directoryReads = new Map();
     this.ignores = ignore();
     this.maxFileBytes = maxFileBytes;
   }
@@ -101,16 +102,53 @@ class WorkspaceStore {
   async loadBytes(input) {
     const { normalized, target } = await this.resolve(input);
     const stat = await fs.stat(target);
-    if (!stat.isFile()) throw new Error('파일만 삭제할 수 있습니다. 폴더 재귀 삭제는 지원하지 않습니다.');
+    if (!stat.isFile()) throw new Error('파일 경로가 필요합니다. 폴더는 folder_info로 확인하세요.');
     if (stat.size > this.maxFileBytes) throw new Error('파일 크기 제한을 초과했습니다. 파일 크기 설정을 확인하세요.');
     const buffer = await fs.readFile(target);
     if (buffer.length > this.maxFileBytes) throw new Error('파일 크기 제한을 초과했습니다.');
     return { path: normalized, target, buffer, hash: digestBytes(buffer) };
   }
-  async fileInfo(input) {
+  async fileInfo(input, cancelled = () => false) {
+    const resolved = await this.resolve(input);
+    if ((await fs.stat(resolved.target)).isDirectory()) return this.folderInfo(input, cancelled);
     const file = await this.loadBytes(input);
     this.deleteReads.set(file.path, file.hash);
     return { path: file.path, kind: 'file', hash: file.hash, hashType: 'sha256-bytes', size: file.buffer.length };
+  }
+  async loadDirectory(input, includeBytes = false, cancelled = () => false) {
+    const root = await this.resolve(input), stat = await fs.stat(root.target);
+    if (!stat.isDirectory()) throw new Error('folder_info에는 프로젝트 안의 폴더 경로가 필요합니다.');
+    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+    const files = [], directories = []; let size = 0, count = 0;
+    const walk = async relative => {
+      if (cancelled()) throw new Error('작업을 중지했습니다.');
+      const resolved = await this.resolve(relative);
+      if (this.ignores.ignores(resolved.normalized + '/')) throw new Error(`제외된 폴더가 포함되어 있습니다: ${resolved.normalized}`);
+      directories.push(resolved.normalized);
+      if (++count > 1000) throw new Error('폴더 삭제는 하위 파일·폴더 합계 1,000개까지 지원합니다. 범위를 나누세요.');
+      for (const entry of (await fs.readdir(resolved.target, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (cancelled()) throw new Error('작업을 중지했습니다.');
+        const filename = resolved.normalized + '/' + entry.name;
+        this.normalize(filename); // An excluded child prevents deleting the whole folder.
+        if (entry.isSymbolicLink()) throw new Error('링크·정션이 포함된 폴더는 삭제하지 않습니다.');
+        if (entry.isDirectory()) await walk(filename);
+        else if (entry.isFile()) {
+          if (++count > 1000) throw new Error('폴더 삭제는 하위 파일·폴더 합계 1,000개까지 지원합니다. 범위를 나누세요.');
+          const file = await this.loadBytes(filename); size += file.buffer.length;
+          if (size > 32 * 1024 * 1024) throw new Error('한 번의 폴더 삭제 백업은 총 32MB까지 지원합니다. 범위를 나누세요.');
+          files.push({ path: file.path, hash: file.hash, size: file.buffer.length, ...(includeBytes ? { bytes: file.buffer } : {}) });
+        } else throw new Error('일반 파일·폴더만 삭제할 수 있습니다.');
+      }
+    };
+    await walk(root.normalized);
+    const hash = digest(JSON.stringify({ identity, directories, files: files.map(file => ({ path: file.path, hash: file.hash, size: file.size })) }));
+    return { path: root.normalized, target: root.target, identity, hash, files, directories, size };
+  }
+  async folderInfo(input, cancelled = () => false) {
+    const folder = await this.loadDirectory(input, false, cancelled);
+    this.directoryReads.set(folder.path, folder.hash);
+    const names = [...folder.directories, ...folder.files.map(file => file.path)];
+    return { path: folder.path, kind: 'directory', hash: folder.hash, size: folder.size, fileCount: folder.files.length, directoryCount: folder.directories.length, entries: names.slice(0, 12).map(name => name.length > 160 ? name.slice(0, 157) + '...' : name), truncated: names.length > 12 || names.some(name => name.length > 160) };
   }
   async readFile(input, options) {
     const file = await this.loadFile(input);
@@ -170,7 +208,7 @@ class WorkspaceStore {
     }
     return { matches, truncated: false };
   }
-  async prepareChanges(files) {
+  async prepareChanges(files, cancelled = () => false) {
     if (!Array.isArray(files) || !files.length || files.length > 30) throw new Error('변경 파일은 1~30개여야 합니다.');
     const seen = new Set();
     const changes = [];
@@ -183,6 +221,15 @@ class WorkspaceStore {
       if (seen.has(key)) throw new Error('동일 파일을 중복 변경할 수 없습니다.');
       seen.add(key);
       if (file.action === 'delete') {
+        if ((await fs.stat(target)).isDirectory()) {
+          if (typeof file.baseHash !== 'string' || this.directoryReads.get(normalized) !== file.baseHash) throw new Error(`먼저 folder_info로 폴더 전체를 확인하고 정확한 hash를 사용해야 합니다: ${normalized}`);
+          const snapshot = await this.loadDirectory(normalized, true, cancelled);
+          if (snapshot.hash !== file.baseHash) throw new Error(`확인 뒤 폴더 내용이 변경되었습니다. 다시 확인하세요: ${normalized}`);
+          deletedBytes += snapshot.size;
+          if (deletedBytes > 32 * 1024 * 1024) throw new Error('한 번의 삭제 백업은 총 32MB까지 지원합니다.');
+          changes.push({ path: normalized, target, action: 'delete', directory: true, content: '', original: '폴더 삭제 목록\n' + [...snapshot.directories.map(name => name + '/'), ...snapshot.files.map(item => item.path)].join('\n'), directorySnapshot: snapshot, expectedHash: snapshot.hash, expectedDiskHash: snapshot.hash });
+          continue;
+        }
         const byteRead = this.deleteReads.get(normalized) === file.baseHash;
         if (typeof file.baseHash !== 'string' || !/^[a-f0-9]{64}$/.test(file.baseHash) || (!byteRead && this.editReads.get(normalized)?.hash !== file.baseHash)) throw new Error(`먼저 read_file 또는 file_info로 파일을 확인하고 정확한 hash를 사용해야 합니다: ${normalized}`);
         const snapshot = await this.loadBytes(normalized);
@@ -228,16 +275,18 @@ class WorkspaceStore {
       if (bytes > 512 * 1024 || Buffer.byteLength(content, 'utf8') > this.maxFileBytes || content.includes('\0')) throw new Error('변경 내용이 너무 크거나 텍스트가 아닙니다.');
       changes.push({ ...file, content, path: normalized, target, original: original?.content ?? '', expectedHash: original?.hash ?? null });
     }
+    for (const change of changes.filter(change => change.directory)) if (changes.some(other => other !== change && other.path.toLowerCase().startsWith(change.path.toLowerCase() + '/'))) throw new Error('폴더와 그 내부 경로를 같은 묶음에서 중복 변경할 수 없습니다. 폴더만 지정하세요.');
     return changes;
   }
-  async verifyChanges(changes) {
+  async verifyChanges(changes, cancelled = () => false) {
     for (const change of changes) {
+      if (cancelled()) throw new Error('작업을 중지했습니다.');
       await this.resolve(change.path, change.action === 'create');
       if (change.action === 'create') {
         try { await fs.lstat(change.target); throw new Error(`새 파일 경로가 이미 생겼습니다: ${change.path}`); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       } else if (change.action === 'delete') {
-        if ((await this.loadBytes(change.path)).hash !== change.expectedDiskHash) throw new Error(`미리보기 이후 파일이 변경되었습니다: ${change.path}`);
+        if ((change.directory ? await this.loadDirectory(change.path, false, cancelled) : await this.loadBytes(change.path)).hash !== change.expectedDiskHash) throw new Error(`미리보기 이후 파일·폴더가 변경되었습니다: ${change.path}`);
       } else if ((await this.loadFile(change.path)).hash !== change.expectedHash) throw new Error(`미리보기 이후 파일이 변경되었습니다: ${change.path}`);
     }
   }

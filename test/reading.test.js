@@ -176,4 +176,6 @@ test('deletion review visibly distinguishes removed files and preserves approval
   assert.equal(await page.locator('#apply').isVisible(), false); assert.match(await page.locator('#reviewReason').textContent(), /승인 없이/);
   await host({ type: 'commandApproval', command: 'npm test', root: 'C:/project', changedFiles: [{ path: 'old.js', action: 'delete', id: 'automatic-delete', currentTask: true }], token: 'command' });
   assert.match(await page.locator('#commandChanges').textContent(), /삭제 · old.js/);
+  await host({ type: 'changes', summary: '구형 폴더 삭제', files: [{ id: 'folder-preview', path: 'old-assets', action: 'delete', directory: true, size: 123 }], review: true, forcedReview: ['old-assets'], token: 'folder-token' });
+  assert.match(await page.locator('#changeFiles .deleted-file').textContent(), /D · 폴더 삭제.*old-assets/);
 });

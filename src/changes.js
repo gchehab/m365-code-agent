@@ -10,7 +10,8 @@ class ChangeController {
   constructor(host, vscode) { this.host = host; this.vscode = vscode; }
   assertNoDirtyDeletions(changes) {
     for (const change of changes.filter(change => change.action === 'delete')) {
-      if ((this.vscode.workspace?.textDocuments || []).some(document => document.uri.scheme === 'file' && path.resolve(document.uri.fsPath).toLowerCase() === path.resolve(change.target).toLowerCase() && document.isDirty)) throw new Error(`저장하지 않은 변경이 있는 파일은 삭제·복원하지 않습니다: ${change.path}`);
+      const target = path.resolve(change.target).toLowerCase();
+      if ((this.vscode.workspace?.textDocuments || []).some(document => { const filename = document.uri.scheme === 'file' ? path.resolve(document.uri.fsPath).toLowerCase() : ''; return document.isDirty && (filename === target || (change.directory && filename.startsWith(target + path.sep))); })) throw new Error(`저장하지 않은 변경이 있는 파일은 삭제·복원하지 않습니다: ${change.path}`);
     }
   }
   recordCheckpoint(store, changes) {
@@ -26,6 +27,14 @@ class ChangeController {
       try {
         await store.resolve(change.path, true);
         if (!await exists(change.target)) missing.push(change);
+        else if (change.directory) {
+          const stat = await fs.stat(change.target);
+          if (!stat.isDirectory() || `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` !== change.directorySnapshot.identity) { missing.push(change); continue; }
+          const files = [], directories = [];
+          for (const file of change.directorySnapshot.files) { const resolved = await store.resolve(file.path, true); if (!await exists(resolved.target)) files.push(file); }
+          for (const name of change.directorySnapshot.directories) { const resolved = await store.resolve(name, true); if (!await exists(resolved.target)) directories.push(name); }
+          if (files.length || directories.length) missing.push({ ...change, partialDirectory: true, directorySnapshot: { ...change.directorySnapshot, files, directories } });
+        }
       } catch (error) { this.host.output?.appendLine(`삭제 상태 확인 실패 · ${change.path}: ${error.message}`); }
     }
     if (missing.length) this.recordCheckpoint(store, missing);
@@ -62,7 +71,7 @@ class ChangeController {
       host.previews.set(id + '-new', change.content);
       if (host.previews.size > 200) host.previews.delete(host.previews.keys().next().value);
     }
-    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId, binary: change.binary, size: change.originalBytes?.length })), review, autoApproved: autoApprove === true, forcedReview, token: crypto.randomUUID() };
+    const viewData = { type: 'changes', summary, files: changes.map(change => ({ path: change.path, action: change.action, id: change.previewId, binary: change.binary, directory: change.directory === true, size: change.originalBytes?.length ?? change.directorySnapshot?.size })), review, autoApproved: autoApprove === true, forcedReview, token: crypto.randomUUID() };
     if (review) {
       host.post({ type: 'status', text: `파일 ${changes.length}개 변경 승인 대기 · diff를 확인하고 적용을 누르세요.` });
       const approved = await new Promise(resolve => { host.pending = { kind: 'changes', resolve, changes, viewData }; host.post(viewData); });
@@ -71,13 +80,21 @@ class ChangeController {
       if (!approved || host.stopRequested || host.agent?.cancelled) return false;
     } else host.post(viewData);
     if (host.stopRequested || host.agent?.cancelled) return false;
-    await store.verifyChanges(changes);
+    await store.verifyChanges(changes, () => host.stopRequested || host.agent?.cancelled);
     const edit = new vscode.WorkspaceEdit();
     const documents = [];
+    const directoryDeletes = [];
+    let hasFileEdits = false;
     for (const change of changes) {
       const uri = vscode.Uri.file(change.target);
       if (change.action === 'delete') {
-        edit.deleteFile(uri, { recursive: false, ignoreIfNotExists: false });
+        if (change.directory) {
+          // Delete only the observed entries, then empty directories. A new,
+          // unobserved child makes the directory removal fail instead of being lost.
+          for (const file of change.directorySnapshot.files) edit.deleteFile(vscode.Uri.file((await store.resolve(file.path)).target), { recursive: false, ignoreIfNotExists: false });
+          directoryDeletes.push(...change.directorySnapshot.directories);
+          hasFileEdits ||= change.directorySnapshot.files.length > 0;
+        } else edit.deleteFile(uri, { recursive: false, ignoreIfNotExists: false });
       } else if (change.action === 'create') {
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.target)));
         edit.createFile(uri, { overwrite: false, ignoreIfExists: false });
@@ -88,16 +105,29 @@ class ChangeController {
         if (digest(document.getText()) !== change.expectedHash) throw new Error(`파일이 변경되었습니다: ${change.path}`);
         edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), change.content);
       }
+      if (!change.directory) hasFileEdits = true;
       documents.push({ uri, change });
     }
-    await store.verifyChanges(changes);
+    await store.verifyChanges(changes, () => host.stopRequested || host.agent?.cancelled);
     if (host.stopRequested || host.agent?.cancelled) return false;
     this.assertNoDirtyDeletions(changes);
-    let applied = false, applyError;
-    try { applied = await vscode.workspace.applyEdit(edit, { isRefactoring: false }); } catch (error) { applyError = error; }
+    let applied, applyError;
+    try {
+      applied = !hasFileEdits || await vscode.workspace.applyEdit(edit, { isRefactoring: false });
+      // VS Code prevalidates all deletions in a single edit. A parent must be
+      // removed in a later edit, after its observed children are actually gone.
+      for (const depth of [...new Set(directoryDeletes.map(name => name.split('/').length))].sort((a, b) => b - a)) {
+        if (!applied) break;
+        if (host.stopRequested || host.agent?.cancelled) throw new Error('작업을 중지했습니다.');
+        this.assertNoDirtyDeletions(changes);
+        const directoryEdit = new vscode.WorkspaceEdit();
+        for (const name of directoryDeletes.filter(name => name.split('/').length === depth)) directoryEdit.deleteFile(vscode.Uri.file((await store.resolve(name)).target), { recursive: false, ignoreIfNotExists: false });
+        applied = await vscode.workspace.applyEdit(directoryEdit, { isRefactoring: false });
+      }
+    } catch (error) { applied = false; applyError = error; }
     if (!applied) {
       const partial = await this.preservePartialDeletes(store, changes);
-      const error = new Error(`VS Code가 변경을 완료하지 못했습니다.${partial ? ' 이미 삭제된 ' + partial + '개 파일의 백업을 보관했습니다. 되돌리기로 복원할 수 있습니다.' : ' 편집기에서 파일 상태를 확인하세요.'}`, { cause: applyError });
+      const error = new Error(`VS Code가 변경을 완료하지 못했습니다.${partial ? ' 부분 삭제 ' + partial + '건의 백업을 보관했습니다. 되돌리기로 복원할 수 있습니다.' : ' 편집기에서 파일 상태를 확인하세요.'}`, { cause: applyError });
       if (partial) error.code = 'PARTIAL_DELETE';
       throw error;
     }
@@ -129,20 +159,47 @@ class ChangeController {
     const edit = new vscode.WorkspaceEdit();
     const saves = [];
     const restores = [];
+    const restoreDirectories = [];
+    let editNeeded = false;
     this.assertNoDirtyDeletions(checkpoint.changes);
     for (const change of checkpoint.changes) {
       await checkpoint.store.resolve(change.path, change.action === 'delete');
       const uri = vscode.Uri.file(change.target);
       if (change.action === 'delete') {
-        if (await exists(change.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
-        edit.createFile(uri, { overwrite: false, ignoreIfExists: false, contents: change.originalBytes });
-        restores.push(change);
+        if (!change.partialDirectory && await exists(change.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
+        if (change.directory) {
+          if (change.partialDirectory) {
+            const stat = await fs.stat(change.target);
+            if (!stat.isDirectory() || `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` !== change.directorySnapshot.identity) throw new Error(`부분 삭제 후 폴더가 바뀌어 복원하지 않습니다: ${change.path}`);
+          }
+          for (const name of change.directorySnapshot.directories) {
+            const resolved = await checkpoint.store.resolve(name, true);
+            if (await exists(resolved.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${name}`);
+            restoreDirectories.push({ path: name, target: resolved.target });
+          }
+          for (const file of change.directorySnapshot.files) {
+            const resolved = await checkpoint.store.resolve(file.path, true);
+            if (await exists(resolved.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${file.path}`);
+            edit.createFile(vscode.Uri.file(resolved.target), { overwrite: false, ignoreIfExists: false, contents: file.bytes });
+            restores.push({ path: file.path, target: resolved.target }); editNeeded = true;
+          }
+        } else {
+          edit.createFile(uri, { overwrite: false, ignoreIfExists: false, contents: change.originalBytes });
+          restores.push(change); editNeeded = true;
+        }
         continue;
       }
       const document = await vscode.workspace.openTextDocument(uri);
       if (document.isDirty || digest(document.getText()) !== change.appliedHash || digest(await fs.readFile(change.target, 'utf8')) !== change.diskHash) throw new Error(`이후 편집이 있어 되돌릴 수 없습니다: ${change.path}`);
       if (change.action === 'create') edit.deleteFile(uri, { recursive: false });
       else { edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), change.original); saves.push(uri); }
+      editNeeded = true;
+    }
+    for (const directory of restoreDirectories.sort((a, b) => a.path.split('/').length - b.path.split('/').length)) {
+      await checkpoint.store.resolve(directory.path, true);
+      if (await exists(directory.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${directory.path}`);
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(directory.target));
+      await checkpoint.store.resolve(directory.path);
     }
     for (const change of restores) {
       await checkpoint.store.resolve(change.path, true);
@@ -151,7 +208,7 @@ class ChangeController {
       if (await exists(change.target)) throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
     }
     this.assertNoDirtyDeletions(checkpoint.changes);
-    if (!await vscode.workspace.applyEdit(edit)) throw new Error('되돌리기를 적용하지 못했습니다.');
+    if (editNeeded && !await vscode.workspace.applyEdit(edit)) throw new Error('되돌리기를 적용하지 못했습니다.');
     host.checkpoints.pop();
     for (const change of checkpoint.changes) {
       const key = checkpoint.store.root.toLowerCase() + '\0' + change.path.toLowerCase();

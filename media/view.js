@@ -245,7 +245,7 @@ window.addEventListener('message', ({ data }) => {
     el('reviewReason').textContent = data.autoApproved ? '승인 없이 진행 · 검증 후 자동 적용합니다.' : data.forcedReview?.length ? '파일 삭제·실행 설정 변경은 자동 적용 설정과 관계없이 검토가 필요합니다.' : '';
     el('changes').hidden = false; el('changeTitle').textContent = data.summary; el('changeFiles').replaceChildren();
     for (const file of data.files) {
-      const button = document.createElement('button'); button.className = 'file' + (file.action === 'delete' ? ' deleted-file' : ''); button.textContent = `${file.action === 'delete' ? 'D · 삭제' : file.action === 'create' ? '+' : 'M'}  ${file.path}${file.binary ? ' (바이너리)' : ''}`; button.title = file.action === 'delete' ? '삭제할 파일 미리보기' : 'VS Code에서 diff 열기';
+      const button = document.createElement('button'); button.className = 'file' + (file.action === 'delete' ? ' deleted-file' : ''); button.textContent = `${file.action === 'delete' ? (file.directory ? 'D · 폴더 삭제' : 'D · 삭제') : file.action === 'create' ? '+' : 'M'}  ${file.path}${file.binary ? ' (바이너리)' : ''}`; button.title = file.action === 'delete' ? '삭제할 파일 미리보기' : 'VS Code에서 diff 열기';
       button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id })); el('changeFiles').append(button);
     }
     el('apply').hidden = !data.review; el('reject').hidden = !data.review;

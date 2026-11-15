@@ -43,14 +43,14 @@ test('partial text reads authorize deletion by saved content hash, but stale edi
   await assert.rejects(stale.prepareChanges([{ path: cached.path, action: 'delete', baseHash: cached.hash }]), /변경/);
 });
 
-test('file_info and delete retain exclusions, root bounds, symlink protection, file-only and size limits', async t => {
+test('file_info and delete retain exclusions, root bounds, symlink protection, directory metadata and file size limits', async t => {
   const { root } = await fixture(t);
   await fs.writeFile(path.join(root, '.gitignore'), 'ignored/\n'); await fs.mkdir(path.join(root, 'ignored')); await fs.writeFile(path.join(root, 'ignored', 'file'), 'secret');
   await fs.writeFile(path.join(root, '.env'), 'secret');
   const store = await new WorkspaceStore(root).initialize();
   for (const name of ['..', '../outside', 'C:/outside', '.env', 'ignored/file', 'NUL', '.']) await assert.rejects(store.fileInfo(name));
   await assert.rejects(store.fileInfo('ignored'), /제외|파일/);
-  await fs.mkdir(path.join(root, 'folder')); await assert.rejects(store.fileInfo('folder'), /폴더/);
+  await fs.mkdir(path.join(root, 'folder')); assert.equal((await store.fileInfo('folder')).kind, 'directory');
   const outside = await directory(t, 'delete-outside-'); await fs.writeFile(path.join(outside, 'keep.txt'), 'keep');
   await fs.symlink(outside, path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(store.fileInfo('escape/keep.txt'), /링크|정션/);

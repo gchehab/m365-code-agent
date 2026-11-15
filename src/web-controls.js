@@ -1,5 +1,6 @@
 'use strict';
 const { conversationUrl, historyMessages } = require('./web-history');
+const { inspectControls } = require('./controls');
 
 const modelName = /\b(auto|smart|gpt|claude|openai|anthropic|gemini|quick response|think deeper|reasoning)\b|자동|스마트|빠른 응답|심층|추론|깊이/i;
 async function trigger(browser) {
@@ -21,11 +22,11 @@ async function trigger(browser) {
 async function visibleItems(frame) {
   const items = [];
   for (const role of ['option', 'menuitemradio', 'menuitem']) {
-    for (const locator of await frame.getByRole(role).all()) {
-      if (!await locator.isVisible() || !await locator.isEnabled()) continue;
-      const label = ((await locator.getAttribute('aria-label')) || await locator.innerText()).replace(/\s+/g, ' ').trim();
+    for (const state of await frame.getByRole(role).evaluateAll(inspectControls)) {
+      if (!state.visible || !state.enabled) continue;
+      const label = state.label;
       if (!label || label.length > 160 || (!modelName.test(label) && !/^(more|더 보기|더보기)$/i.test(label))) continue;
-      items.push({ role, label, submenu: ['menu', 'true'].includes(await locator.getAttribute('aria-haspopup')) });
+      items.push({ role, label, submenu: ['menu', 'true'].includes(state.popup) });
     }
   }
   return items;

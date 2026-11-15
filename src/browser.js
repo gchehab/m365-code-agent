@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { normalizeDraft, matchesPrompt, readComposer, promptLimitError, isAgentProtocolDraft } = require('./composer');
 const { scanResponses, defaultResponses } = require('./responses');
 const { conversationUrl } = require('./web-history');
+const { inspectControls, firstReadyControl, anyReadyControl } = require('./controls');
 
 const allowedHosts = new Set(['m365.cloud.microsoft', 'copilot.cloud.microsoft', 'www.microsoft365.com', 'microsoft365.com', 'www.office.com', 'office.com']);
 const authHosts = new Set(['login.microsoftonline.com', 'login.microsoft.com', 'login.live.com', 'account.microsoft.com']);
@@ -120,46 +121,59 @@ class CopilotBrowser {
       frame.locator('button[data-testid="send-button"], button[data-testid="sendButton"], button[data-testid="send-message-button"], button[data-testid="submit-button"], button#submit-button, button#sendMessageButton, button:has([data-icon-name="Send"])'),
       composer.locator('xpath=ancestor::form[1]').locator('button[type="submit"]')
     ];
-    for (const group of groups) for (const button of (await group.all()).slice(0, 12)) {
-      if (await button.isVisible() && await button.isEnabled()) return button;
-    }
+    for (const group of groups) { const button = await firstReadyControl(group); if (button) return button; }
     return null;
   }
   async submitPrompt(locator, frame, prompt, baseline, id) {
     let button;
-    const readyDeadline = Date.now() + (this.options.sendReadyTimeoutMs || 8000);
-    while (Date.now() < readyDeadline) {
-      if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      button = await this.findSendButton(frame, locator);
-      if (button) break;
-      await this.page.waitForTimeout(200);
-    }
-    if (!button) {
+    try {
+      const readyDeadline = Date.now() + (this.options.sendReadyTimeoutMs || 8000);
+      while (Date.now() < readyDeadline) {
+        if (this.cancelled) throw new Error('작업을 중지했습니다.');
+        button = await this.findSendButton(frame, locator);
+        if (button) {
+          let actionable = false;
+          try { await button.click({ trial: true, timeout: Math.max(1, Math.min(750, readyDeadline - Date.now())) }); actionable = true; } catch { /* No click was dispatched; safely find a replacement control. */ }
+          if (actionable) {
+            await this.verifyInput(locator, prompt);
+            const [state] = await button.evaluate(inspectControls).catch(() => [{ visible: false }]);
+            if (state.visible && state.enabled) break;
+          }
+          await button.dispose().catch(() => {}); button = null;
+        }
+        await this.page.waitForTimeout(200);
+      }
+      if (!button) {
+        await this.verifyInput(locator, prompt);
+        this.lastSend.stage = 'button-not-ready';
+        throw new Error('전송 버튼을 찾지 못했거나 활성화되지 않았습니다. Copilot 로그인·입력 길이 제한을 확인하세요. 요청은 전송하지 않았습니다.');
+      }
       await this.verifyInput(locator, prompt);
-      this.lastSend.stage = 'button-not-ready';
-      throw new Error('전송 버튼을 찾지 못했거나 활성화되지 않았습니다. Copilot 로그인·입력 길이 제한을 확인하세요. 요청은 전송하지 않았습니다.');
-    }
-    await this.verifyInput(locator, prompt);
-    this.lastSend.stage = 'clicked';
-    await button.click({ timeout: 5000 });
-    const deadline = Date.now() + (this.options.sendAckTimeoutMs || 12000);
-    while (Date.now() < deadline) {
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
-      const cleared = await readComposer(locator).then(snapshot => !snapshot.text.trim()).catch(() => false);
-      const generating = await this.generationActive();
-      let reply = false;
-      for (const text of await this.responseCandidates(id, prompt)) {
-        if (baseline.has(text)) continue;
-        try { parseReply(text, id); reply = true; break; } catch { /* Not a complete response yet. */ }
+      this.lastSend.stage = 'clicked';
+      // Pin one DOM element and attempt a real click only once. Even if the page
+      // replaces it during dispatch, inspect acknowledgement rather than re-clicking.
+      let clickError;
+      try { await button.click({ timeout: 2000 }); } catch (error) { clickError = error; this.lastSend.clickError = error.name; }
+      const deadline = Date.now() + (this.options.sendAckTimeoutMs || 12000);
+      while (Date.now() < deadline) {
+        if (this.cancelled) throw new Error('작업을 중지했습니다.');
+        const cleared = await readComposer(locator).then(snapshot => !snapshot.text.trim()).catch(() => false);
+        const generating = await this.generationActive();
+        let reply = false;
+        for (const text of await this.responseCandidates(id, prompt)) {
+          if (baseline.has(text)) continue;
+          try { parseReply(text, id); reply = true; break; } catch { /* Not a complete response yet. */ }
+        }
+        if (cleared || generating || reply) {
+          this.lastSend.stage = 'confirmed';
+          return;
+        }
+        await this.page.waitForTimeout(200);
       }
-      if (cleared || generating || reply) {
-        this.lastSend.stage = 'confirmed';
-        return;
-      }
-      await this.page.waitForTimeout(200);
-    }
-    this.lastSend.stage = 'unconfirmed';
-    throw new Error('전송 버튼을 눌렀지만 제출을 확인하지 못했습니다. Edge 창의 제한·오류 메시지를 확인하세요. 중복 전송을 피하려고 자동 재전송하지 않았습니다.');
+      this.lastSend.stage = 'unconfirmed';
+      throw new Error((clickError ? '전송 중 버튼 화면이 변경되어 제출을 확인하지 못했습니다.' : '전송 버튼을 눌렀지만 제출을 확인하지 못했습니다.') + ' Edge 창의 제한·오류 메시지를 확인하세요. 중복 전송을 피하려고 자동 재전송하지 않았습니다.');
+    } finally { await button?.dispose().catch(() => {}); }
   }
   async verifyInput(locator, prompt) {
     let snapshot;
@@ -211,7 +225,7 @@ class CopilotBrowser {
   async generationActive() {
     const pattern = /^(Stop generating|Stop responding|Stop response|Stop generation|응답 중지|생성 중지|답변 중지|응답 생성 중지|답변 생성 중지)(\s*\(.*\))?$/i;
     for (const frame of this.page.frames()) {
-      for (const button of await frame.getByRole('button', { name: pattern }).all()) if (await button.isVisible() && await button.isEnabled()) return true;
+      if (!frame.isDetached() && await anyReadyControl(frame.getByRole('button', { name: pattern }))) return true;
     }
     return false;
   }

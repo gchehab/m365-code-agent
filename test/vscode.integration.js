@@ -271,6 +271,77 @@ async function run() {
   await assert.rejects(provider.stageAndApply(deletionStore, await deletionStore.prepareChanges([{ path: dirtyInfo.path, action: 'delete', baseHash: dirtyInfo.hash }]), 'dirty delete', false, true), /저장하지 않은/);
   assert.equal(await fs.readFile(path.join(root, changedInfo.path), 'utf8'), 'user saved edit\n'); await dirtyDocument.save();
 
+  // Native folder deletion removes only observed entries, and restores bytes and empty directories.
+  const folderName = 'folder-delete-native', folderPath = path.join(root, folderName);
+  const folderBytes = new Map([['nested/source.js', Buffer.from('exports.old = true;\r\n')], ['image.bin', Buffer.from([0, 255, 128])], ['nested/utf16.txt', Buffer.concat([Buffer.from([255, 254]), Buffer.from('원본', 'utf16le')])]]);
+  await fs.mkdir(path.join(folderPath, 'nested', 'empty'), { recursive: true });
+  for (const [name, bytes] of folderBytes) await fs.writeFile(path.join(folderPath, name), bytes);
+  const prepareFolderDelete = async () => {
+    const info = await deletionStore.folderInfo(folderName);
+    return deletionStore.prepareChanges([{ path: info.path, action: 'delete', baseHash: info.hash }]);
+  };
+  let folderJob = provider.stageAndApply(deletionStore, await prepareFolderDelete(), '폴더 삭제 검토', false);
+  assert.equal(provider.pending.viewData.files[0].directory, true);
+  await provider.handle({ type: 'reject', token: provider.pending.viewData.token }); assert.equal(await folderJob, false);
+  assert.deepEqual(await fs.readFile(path.join(folderPath, 'image.bin')), folderBytes.get('image.bin'));
+  folderJob = provider.stageAndApply(deletionStore, await prepareFolderDelete(), '검토 후 새 파일 보호', true);
+  await fs.writeFile(path.join(folderPath, 'new.txt'), 'user file');
+  await provider.handle({ type: 'apply', token: provider.pending.viewData.token }); await assert.rejects(folderJob, /변경/);
+  assert.equal(await fs.readFile(path.join(folderPath, 'new.txt'), 'utf8'), 'user file');
+  await fs.unlink(path.join(folderPath, 'new.txt'));
+  assert.equal(await provider.stageAndApply(deletionStore, await prepareFolderDelete(), '폴더 자동 승인 삭제', true, true), true);
+  await assert.rejects(fs.access(folderPath));
+  await fs.mkdir(folderPath); await fs.writeFile(path.join(folderPath, 'recreated.txt'), 'keep');
+  await assert.rejects(provider.undo(), /다시 생겨/);
+  assert.equal(await fs.readFile(path.join(folderPath, 'recreated.txt'), 'utf8'), 'keep');
+  await fs.unlink(path.join(folderPath, 'recreated.txt')); await fs.rmdir(folderPath);
+  await provider.undo();
+  for (const [name, bytes] of folderBytes) assert.deepEqual(await fs.readFile(path.join(folderPath, name)), bytes);
+  assert.ok((await fs.stat(path.join(folderPath, 'nested', 'empty'))).isDirectory());
+  const folderDocument = await vscode.workspace.openTextDocument(path.join(folderPath, 'nested', 'source.js'));
+  const folderDirtyEdit = new vscode.WorkspaceEdit(); folderDirtyEdit.insert(folderDocument.uri, new vscode.Position(0, 0), '// unsaved\n');
+  await vscode.workspace.applyEdit(folderDirtyEdit);
+  await assert.rejects(provider.stageAndApply(deletionStore, await prepareFolderDelete(), '폴더 내 편집 보호', false, true), /저장하지 않은/);
+  await folderDocument.save();
+
+  // Inject a new child after validation using the real onWillDeleteFiles resource event.
+  let injected = false;
+  const raceListener = vscode.workspace.onWillDeleteFiles(event => {
+    if (!injected && event.files.some(uri => uri.fsPath.toLowerCase().startsWith(folderPath.toLowerCase() + path.sep))) {
+      injected = true;
+      event.waitUntil(fs.writeFile(path.join(folderPath, 'new-user.txt'), 'keep new file').then(() => new vscode.WorkspaceEdit()));
+    }
+  });
+  const checkpointsBeforeRace = provider.checkpoints.length;
+  try { await assert.rejects(provider.stageAndApply(deletionStore, await prepareFolderDelete(), '삭제 도중 추가 파일 보호', false, true), /완료하지 못|삭제를 확인/); }
+  finally { raceListener.dispose(); }
+  assert.equal(injected, true);
+  assert.equal(await fs.readFile(path.join(folderPath, 'new-user.txt'), 'utf8'), 'keep new file');
+  if (provider.checkpoints.length > checkpointsBeforeRace) await provider.undo();
+  for (const name of folderBytes.keys()) assert.ok((await fs.stat(path.join(folderPath, name))).isFile());
+  await fs.unlink(path.join(folderPath, 'new-user.txt'));
+
+  // Exercise the model-facing folder_info -> changes(delete) -> done flow.
+  let folderRound = 0;
+  provider.browser.request = async prompt => {
+    const data = JSON.parse(prompt.split('DATA: ')[1]);
+    if (++folderRound === 1) return { kind: 'tools', calls: [{ name: 'folder_info', path: folderName }] };
+    if (folderRound === 2) {
+      const info = data.history.flatMap(item => item.observations || []).findLast(item => item.call.name === 'folder_info').result;
+      return { kind: 'changes', files: [{ path: info.path, action: 'delete', baseHash: info.hash }] };
+    }
+    assert.ok(data.history.some(item => item.kind === 'change_result' && item.applied && item.deletedFiles.includes(folderName)));
+    return { kind: 'done', message: '폴더 삭제 완료' };
+  };
+  await provider.start({ task: folderName + ' 폴더를 삭제해줘.', autoApprove: true, includeEditor: false });
+  assert.equal(folderRound, 3); await assert.rejects(fs.access(folderPath)); await provider.undo();
+  assert.ok((await fs.stat(path.join(folderPath, 'nested', 'empty'))).isDirectory());
+  await fs.mkdir(path.join(root, 'empty-delete', 'empty'), { recursive: true });
+  const emptyInfo = await deletionStore.folderInfo('empty-delete');
+  assert.equal(await provider.stageAndApply(deletionStore, await deletionStore.prepareChanges([{ path: emptyInfo.path, action: 'delete', baseHash: emptyInfo.hash }]), '빈 폴더 삭제', false, true), true);
+  await assert.rejects(fs.access(path.join(root, 'empty-delete'))); await provider.undo();
+  assert.ok((await fs.stat(path.join(root, 'empty-delete', 'empty'))).isDirectory());
+
   // A large file is edited using a bounded read and an exact replacement anchor.
   const large = Array.from({ length: 1000 }, (_, i) => `const row${i} = "${'x'.repeat(60)}";`).join('\n');
   await fs.writeFile(path.join(root, 'src', 'large.js'), large);
@@ -352,7 +423,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'nested/empty-folder deletion, byte restoration, dirty/changed/recreated guards and new-file resource-event race', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

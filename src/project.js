@@ -37,7 +37,7 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
     } catch (error) {
       observations.push({ call: { name: 'read_file', path: file }, error: error.message });
       try {
-        const result = await store.fileInfo(file);
+        const result = await store.fileInfo(file, cancelled);
         remaining -= JSON.stringify(result).length;
         observations.push({ call: { name: 'file_info', path: file }, result });
         emit({ type: 'tool', id: 'project:' + file, label: 'file_info · ' + file, state: 'done', detail: `${result.size.toLocaleString()} bytes · 본문 대신 파일 해시 확인` });

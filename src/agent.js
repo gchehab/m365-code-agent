@@ -67,7 +67,8 @@ class CodingAgent {
               let result;
               const resultBudget = Math.max(256, Math.min(6000, Math.floor((promptBudget - 3500) / Math.min(batchLimit, reply.calls.length))));
               if (call.name === 'read_file') result = await this.store.readFile(call.path, { startLine: call.startLine, startColumn: call.startColumn, lineCount: call.lineCount, maxCharacters: resultBudget });
-              else if (call.name === 'file_info') result = await this.store.fileInfo(call.path);
+              else if (call.name === 'file_info') result = await this.store.fileInfo(call.path, () => this.cancelled);
+              else if (call.name === 'folder_info') result = await this.store.folderInfo(call.path, () => this.cancelled);
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit, call.path);
               else if (call.name === 'search_text') result = await this.store.search(call.query, call.paths);
               else if (call.name === 'run_command') {
@@ -82,7 +83,7 @@ class CodingAgent {
               observations.push({ call, result });
               fresh = progress.observe(call, result) || fresh;
               const failed = result.exitCode !== undefined && result.exitCode !== 0;
-              this.emit({ type: 'tool', id: toolId, label, state: failed ? 'error' : 'done', detail: typeof result.content === 'string' ? `${result.content.length.toLocaleString()}자 읽음 · ${result.startLine}~${result.endLine}줄` : call.name === 'file_info' ? `${result.size.toLocaleString()} bytes · 파일 해시 확인` : result.approved === false ? '실행 거절됨' : result.exitCode !== undefined ? `종료 코드 ${result.exitCode}${result.timedOut ? ' · 시간 초과' : ''}` : undefined });
+              this.emit({ type: 'tool', id: toolId, label, state: failed ? 'error' : 'done', detail: typeof result.content === 'string' ? `${result.content.length.toLocaleString()}자 읽음 · ${result.startLine}~${result.endLine}줄` : ['file_info', 'folder_info'].includes(call.name) ? `${result.size.toLocaleString()} bytes · 파일 해시 확인` : result.approved === false ? '실행 거절됨' : result.exitCode !== undefined ? `종료 코드 ${result.exitCode}${result.timedOut ? ' · 시간 초과' : ''}` : undefined });
             } catch (error) {
               if (this.cancelled) throw error;
               observations.push({ call, error: error.message });
@@ -98,7 +99,7 @@ class CodingAgent {
           let fresh = false;
           try {
             if (this.mode !== 'agent') throw new Error('이번 요청은 분석·계획이므로 파일을 수정하지 않습니다. 설명 또는 계획으로 답변하세요.');
-            const changes = (await this.store.prepareChanges(reply.files)).filter(change => change.action === 'create' || change.action === 'delete' || change.content !== change.original);
+            const changes = (await this.store.prepareChanges(reply.files, () => this.cancelled)).filter(change => change.action === 'create' || change.action === 'delete' || change.content !== change.original);
             if (!changes.length) { const error = new Error('수정안이 현재 파일과 동일합니다. 새 변경 없이 완료한 파일을 다시 적용하지 마세요.'); error.code = 'UNCHANGED_CHANGES'; throw error; }
             this.emit({ type: 'message', role: 'assistant', text: reply.summary || '파일 수정안을 준비했습니다.' });
             const applied = await this.approveAndApply(changes, reply.summary || '파일 수정안');
@@ -121,7 +122,7 @@ class CodingAgent {
                 const deleting = reply.files.some(file => file?.path === path && file.action === 'delete');
                 const call = deleting ? { name: 'file_info', path } : { name: 'read_file', path, startLine: 1, lineCount: 120 };
                 try {
-                  const result = deleting ? await this.store.fileInfo(path) : await this.store.readFile(path, { startLine: 1, lineCount: 120, maxCharacters: Math.max(256, Math.min(3000, Math.floor((promptBudget - 4000) / paths.length))) });
+                  const result = deleting ? await this.store.fileInfo(path, () => this.cancelled) : await this.store.readFile(path, { startLine: 1, lineCount: 120, maxCharacters: Math.max(256, Math.min(3000, Math.floor((promptBudget - 4000) / paths.length))) });
                   observations.push({ call, result }); fresh = progress.observe(call, result) || fresh;
                   this.emit({ type: 'tool', id, label: '수정 대상 자동 확인 · ' + path, state: 'done', detail: `${deleting ? result.size + ' bytes' : result.content.length + '자'} · 실제 hash 확인. 검증한 새 수정안을 요청합니다.` });
                 } catch (readError) { observations.push({ call, error: readError.message }); this.emit({ type: 'tool', id, label: '수정 대상 자동 확인 · ' + path, state: 'error', detail: readError.message }); }

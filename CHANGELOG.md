@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0
+
+- Fix transient Copilot control replacement causing `locator.isEnabled` timeouts. Read button state atomically, retry only before dispatch, and collect acknowledgement after uncertain click completion without clicking again.
+- Support nested and empty-folder deletion through `folder_info`, complete observed-tree hashes, raw-byte backups and explicit delete actions. Bound each tree to 1,000 entries and deletion backups to 32MB per batch.
+- Delete only known files and empty directories through VS Code. Reject excluded children, links, overlapping actions, changed trees and dirty descendants. Preserve partial deletion backups and protect newly added files.
+- Restore original bytes and empty folders; refuse recreated paths and replaced partial-deletion roots. Keep normal deletion review and explicit automatic approval independent of request limits.
+- Exercise browser DOM races, folder validation, partial failure, UI labels and native VS Code folder deletion/restoration.
+
 ## 0.11.0
 
 - Support explicit delete actions for text, binary and empty workspace files, with file_info byte-hash/size inspection and read/hash verification. Reject excluded/secret/link/outside-root paths and directory deletion.
