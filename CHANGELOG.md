@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.13.3
 
 - Advertise `run_command` in the Agent tool list, explain that JSON calls execute in the VS Code host, and provide a command request example. Keep command tools/examples out of read-only prompts and leave approval enforcement in the host.
 - Make cleanup fixtures independent of repository output by using canonical OS temporary paths. Exercise lowercase Windows drive input and assert that the ownership-change hook actually ran.
 - Clarify automatic approval in the UI and README: execution-config review is also skipped, shell commands run with user privileges outside file-tool protections, and command effects are not covered by file undo.
 - Record the limited 0.13.2 live-account example check separately from mock/VS Code tests and the pending live-account recheck of the revised prompt.
+- Flush and print VS Code integration output when the host fails. Retain only the explicit integration log/report artifacts under the hidden test-output path so CI failures remain diagnosable.
 
 ## 0.13.2
 
