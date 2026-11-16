@@ -28,6 +28,31 @@ async function run() {
   assert.equal(provider.responsePanel.panel, responsePanel, 'reader reuses the editor tab');
   provider.responsePanel.dispose();
   const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  // Diagnose launch/storage failure without launching again or requiring a company login.
+  const connectionOriginalContext = provider.context, connectionOriginalOutput = provider.output, connectionOriginalPost = provider.post;
+  const connectionEvents = [], connectionLog = []; let launchAttempts = 0;
+  try {
+    provider.output = { appendLine: text => connectionLog.push(text), show() {} };
+    provider.post = event => connectionEvents.push(event);
+    provider.browser = { async connect() { launchAttempts++; throw new Error("Chromium distribution 'msedge' is not found"); } };
+    await assert.rejects(provider.ensureBrowser(), {code:'BROWSER_NOT_FOUND'});
+    await provider.diagnostics();
+    assert.equal(launchAttempts, 1, 'offline diagnostics must not retry a failed launch');
+    assert.ok(connectionLog.some(text => text.includes('connectionEnvironment')));
+    assert.ok(connectionEvents.some(event => event.text?.includes('BROWSER_NOT_FOUND')));
+    await fs.writeFile(path.join(root, 'blocked-storage'), 'user file');
+    const blockedContext = Object.create(connectionOriginalContext);
+    Object.defineProperty(blockedContext, 'globalStorageUri', {value:vscode.Uri.file(path.join(root, 'blocked-storage'))});
+    provider.context = blockedContext; provider.browser = null;
+    await assert.rejects(provider.ensureBrowser(), {code:'PROFILE_ACCESS_FAILED'});
+    await provider.diagnostics();
+    assert.ok(connectionEvents.some(event => event.text?.includes('전용 프로필 쓰기: 실패')));
+    assert.equal(await fs.readFile(path.join(root, 'blocked-storage'), 'utf8'), 'user file');
+    await fs.unlink(path.join(root, 'blocked-storage'));
+  } finally {
+    provider.context = connectionOriginalContext; provider.output = connectionOriginalOutput; provider.post = connectionOriginalPost;
+    provider.browser = null; provider.browserPanel.dispose();
+  }
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   const original = 'exports.average = values => values.reduce((a,b)=>a+b,0)/values.length;\n';
   await fs.writeFile(path.join(root, 'src', 'average.js'), original);
@@ -423,7 +448,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(provider.context.workspaceState.get('sessions').some(session => session.id === id), false);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
-  const report = { ok: true, checks: ['extension activation', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'nested/empty-folder deletion, byte restoration, dirty/changed/recreated guards and new-file resource-event race', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  const report = { ok: true, checks: ['extension activation', 'offline browser launch/profile diagnostics without relaunch', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'nested/empty-folder deletion, byte restoration, dirty/changed/recreated guards and new-file resource-event race', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
 module.exports = { run };

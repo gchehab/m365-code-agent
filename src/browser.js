@@ -11,6 +11,7 @@ const {
 const { scanResponses, defaultResponses } = require('./responses');
 const { conversationUrl } = require('./web-history');
 const { inspectControls, firstReadyControl, anyReadyControl } = require('./controls');
+const { connectionError } = require('./connection');
 
 const allowedHosts = new Set([
   'm365.cloud.microsoft',
@@ -68,49 +69,86 @@ class CopilotBrowser {
   }
   async connect() {
     if (!this.connecting)
-      this.connecting = this.openConnection().finally(() => {
-        this.connecting = null;
-      });
+      this.connecting = this.openConnection()
+        .catch((error) => {
+          const failure = connectionError(error, this.connectionStage || 'launch', this.options);
+          this.lastConnectionFailure = failure.connectionFailure;
+          throw failure;
+        })
+        .finally(() => {
+          this.connecting = null;
+        });
     return this.connecting;
   }
   async openConnection() {
-    if (this.context && (!this.page || this.page.isClosed())) {
-      const pages = this.context.pages().filter((page) => !page.isClosed());
-      const copilot = pages.filter((page) => {
-        try {
-          validateCopilotUrl(page.url());
-          return true;
-        } catch {
-          return false;
+    this.connectionStage = 'reuse';
+    if (this.context) {
+      try {
+        const pages = this.context.pages().filter((page) => !page.isClosed());
+        if (!this.page || this.page.isClosed()) {
+          this.page =
+            pages.findLast((page) => {
+              try {
+                validateCopilotUrl(page.url());
+                return true;
+              } catch {
+                return false;
+              }
+            }) ||
+            pages.at(-1) ||
+            (await this.context.newPage());
+        }
+      } catch (error) {
+        if (!/closed|disposed/i.test(error.message)) throw error;
+        this.context = null;
+        this.page = null;
+      }
+    }
+    if (!this.context) {
+      this.connectionStage = 'url';
+      validateCopilotUrl(this.options.url);
+      this.connectionStage = 'launch';
+      const { chromium } = require('playwright-core');
+      const context = await chromium.launchPersistentContext(this.options.profile, {
+        channel: this.options.channel || 'msedge',
+        headless: Boolean(this.options.embedded),
+        viewport: this.options.embedded ? { width: 1100, height: 760 } : null,
+        acceptDownloads: false,
+        locale: 'ko-KR',
+      });
+      this.context = context;
+      context.on('close', () => {
+        if (this.context === context) {
+          this.context = null;
+          this.page = null;
         }
       });
-      if (copilot.length) this.page = copilot.at(-1);
+      this.page = context.pages()[0] || (await context.newPage());
+      this.needsNavigation = true;
     }
-    if (this.context && this.page && !this.page.isClosed()) {
-      if (this.page.url() === 'about:blank' || this.page.url().startsWith('chrome-error:')) {
-        await this.page.goto(validateCopilotUrl(this.options.url), {
-          waitUntil: 'domcontentloaded',
-          timeout: 60000,
-        });
-      }
-      return;
-    }
-    const url = validateCopilotUrl(this.options.url);
-    const { chromium } = require('playwright-core');
-    this.context = await chromium.launchPersistentContext(this.options.profile, {
-      channel: this.options.channel || 'msedge',
-      headless: Boolean(this.options.embedded),
-      viewport: this.options.embedded ? { width: 1100, height: 760 } : null,
-      acceptDownloads: false,
-      locale: 'ko-KR',
-    });
-    this.context.on('close', () => {
-      this.context = null;
-      this.page = null;
-    });
-    this.page = this.context.pages()[0] || (await this.context.newPage());
     this.page.setDefaultTimeout(7000);
-    await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const current = this.page.url();
+    if (this.needsNavigation && current !== 'about:blank' && !current.startsWith('chrome-error:')) {
+      // Preserve a working composer or a sign-in page after a navigation timeout.
+      if (
+        isLoginUrl(current) ||
+        (await this.getComposer()
+          .then(() => true)
+          .catch(() => false))
+      )
+        this.needsNavigation = false;
+    }
+    if (this.needsNavigation || current === 'about:blank' || current.startsWith('chrome-error:')) {
+      this.connectionStage = 'navigation';
+      this.needsNavigation = true;
+      await this.page.goto(validateCopilotUrl(this.options.url), {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      });
+      this.needsNavigation = false;
+    }
+    this.connectionStage = 'ready';
+    this.lastConnectionFailure = null;
   }
   async getComposer() {
     const configured = this.options.composerSelector;
@@ -204,8 +242,8 @@ class CopilotBrowser {
       await handle?.dispose().catch(() => {});
     }
   }
-  async diagnostics() {
-    await this.connect();
+  async diagnostics({ connect = true } = {}) {
+    if (connect) await this.connect();
     let composer;
     try {
       composer = (await this.getComposer()).selector;
@@ -213,7 +251,8 @@ class CopilotBrowser {
       composer = error.message;
     }
     return {
-      url: this.page.url().split('?')[0],
+      url: this.page.url().split(/[?#]/)[0],
+      connectionStage: this.connectionStage || 'ready',
       title: await this.page.title(),
       composer,
       frames: this.page.frames().length,

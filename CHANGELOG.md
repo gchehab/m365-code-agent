@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2
+
+- Keep connection diagnostics available without a browser or a successful launch. Report extension/VS Code/runtime/OS versions, selected channel/view, standard install detection and a temporary profile write probe without retrying startup.
+- Catch profile and webview creation failures as well as browser launch failures. Automatically show stage-specific failure codes/details in the output panel; redact profile/storage paths and URL query/fragment data from reported failures.
+- Reuse a live persistent context after page loss or navigation failure, retry failed navigation, preserve an existing composer/sign-in page, and prevent an old close event from discarding a newer connection.
+- Cover startup classification, offline storage failure, navigation retry, login-page/context reuse, late-close races and actual isolated persistent Edge launch. Verify offline failure diagnostics inside real VS Code.
+- Company-PC launch and tenant access must still be confirmed from the reported diagnostic code; do not reset profiles, bypass certificates or change security policies automatically.
+
 ## 0.13.1
 
 - Extend JSDoc checking to change application/undo and the agent loop. Enable noImplicitAny, add typed host/transport/approval contracts and check VS Code calls against the minimum supported API types.

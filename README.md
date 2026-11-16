@@ -13,7 +13,7 @@ VS Code의 프로젝트를 읽고 수정하며, 로그인된 M365 Copilot 웹과
 
 ## 설치
 
-1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.13.1.vsix`를 선택합니다.
+1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.13.2.vsix`를 선택합니다.
 2. 프로젝트 폴더를 열고 오른쪽 보조 사이드바의 M365 Agent를 엽니다. 명령 팔레트에서 `M365 Agent: 오른쪽에서 열기`로도 열 수 있습니다.
 3. 입력창 아래 `연결`을 누릅니다. VS Code 편집기 탭에 `M365 Copilot 브라우저`가 열립니다. PC에 설치된 Edge의 실제 자동화 페이지를 이 탭에서 보고 조작합니다.
 4. 이 브라우저 탭에서 **회사 계정 로그인과 MFA를 직접** 완료하고 Copilot 대화 화면으로 이동합니다. 마우스·스크롤·입력·한글 IME를 지원합니다. 네이티브 OS 인증 창이 필요한 경우 `외부 브라우저로 전환`을 사용하세요.
@@ -152,6 +152,18 @@ Copilot 입력창에 직접 작성 중인 내용이 있으면 덮어쓰지 않�
 Microsoft의 데이터 보호 설명은 적용 계약·관리 설정에 따른 보호를 설명하지만, 이 비공식 확장이나 브라우저 자동화의 사용 승인을 보장하지 않습니다. 회사의 DLP·코드 반출·브라우저 자동화 정책 및 적용 계약에 맞는 환경에서만 사용하세요. 로컬 파일을 웹 프롬프트에 붙이는 동작에 원본 파일의 민감도 레이블이 자동으로 따라간다고 보장하지 않습니다. [Microsoft의 기업 데이터 보호 설명](https://learn.microsoft.com/en-us/copilot/plan/enterprise-data-protection)을 참고하세요.
 전용 Edge를 사용하는 웹 자동화입니다. 기본값에서는 화면을 VS Code 탭에 표시하며, 외부 모드의 브라우저 창을 직접 닫으면 다시 연결해야 합니다. 실제 회사 로그인과 응답 언어 동작은 해당 테넌트에서 검증해야 합니다.
 WSL/SSH/컨테이너 등 원격 프로젝트는 이번 버전의 대상이 아닙니다.
+
+## 브라우저가 열리지 않을 때
+
+연결 실패 시 출력 패널의 **M365 Code Agent**에 실패 단계와 원인 코드를 자동으로 기록합니다. `⋯ → 연결 진단` 또는 명령 팔레트의 `M365 Agent: 연결 진단`은 브라우저가 실행되지 않아도 동작합니다. 확장·VS Code·Node/OS 버전, 선택한 브라우저·표시 방식, 기본 설치 위치 확인, 전용 프로필의 임시 쓰기 검사 결과와 최근 실패를 표시하며 브라우저를 다시 실행하지 않습니다. 기본 경로에서 실행 파일을 찾지 못한 결과만으로 사용자 지정 설치가 없다고 단정하지는 않습니다.
+
+- `PROFILE_ACCESS_FAILED`: VS Code 확장 저장소 접근·쓰기 권한 또는 저장 공간을 확인합니다.
+- `BROWSER_NOT_FOUND`: 선택한 Edge/Chrome 설치를 확인합니다. `PROFILE_IN_USE`이면 같은 전용 프로필을 사용하는 다른 VS Code 창의 M365 연결을 종료한 뒤 다시 연결합니다.
+- `BROWSER_PANEL_FAILED`: VS Code 창을 다시 로드하거나 `m365Agent.browserView=external`로 화면 표시를 확인합니다.
+- `BROWSER_CERTIFICATE_FAILED` / `BROWSER_PROXY_FAILED`: 회사 인증서·프록시·VPN 및 일반 브라우저의 M365 접속 상태를 확인합니다.
+- `BROWSER_NAVIGATION_TIMEOUT` / `BROWSER_NAVIGATION_FAILED`: 브라우저 실행 이후의 페이지 로딩 실패입니다. 현재 창의 상태를 확인하고 다시 연결합니다.
+
+페이지 로딩 실패 뒤에는 실행 중인 전용 브라우저를 재사용해 다시 연결합니다. 남아 있는 로그인 탭·정상 입력창은 보존하며, 오류 복구를 위해 프로필·쿠키를 삭제하거나 인증서/회사 정책 검사를 우회하지 않습니다. 출력에서 단계·원인 코드·실행 환경 결과를 확인할 수 있지만 이 진단만으로 실제 회사 환경의 원인이 해결됐다고 보장하지는 않습니다.
 
 ## 개발과 검증
 

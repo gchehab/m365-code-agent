@@ -19,6 +19,7 @@ const { ModelController } = require('./models');
 const { ChangeController } = require('./changes');
 const { BrowserPanel } = require('./browser-panel');
 const { ResponsePanel } = require('./response-panel');
+const { connectionError, environmentDiagnostics } = require('./connection');
 
 class AgentView {
   constructor(context) {
@@ -183,39 +184,51 @@ class AgentView {
     }
   }
   async ensureBrowser() {
-    if (!this.browser) {
-      const config = this.config();
-      const profile = path.join(this.context.globalStorageUri.fsPath, 'edge-profile');
-      await fs.mkdir(profile, { recursive: true });
-      this.browser = new CopilotBrowser({
-        profile,
-        url: config.get('copilotUrl'),
-        channel: config.get('browserChannel'),
-        embedded: (this.browserViewOverride || config.get('browserView', 'editor')) === 'editor',
-        composerSelector: config.get('composerSelector'),
-        sendButtonSelector: config.get('sendButtonSelector'),
-        responseSelector: config.get('responseSelector'),
-        timeoutSeconds: config.get('responseTimeoutSeconds'),
-        loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600),
-        modelButtonSelector: config.get('modelButtonSelector'),
-        onConversation: (info) => {
-          if (info.restorable) {
-            this.webUrl = info.url;
-            this.saveSession();
-            this.post({ type: 'webConversation', url: info.url });
-          }
-        },
-      });
-    }
+    let stage = 'panel';
+    const config = this.config();
+    const embedded = (this.browserViewOverride || config.get('browserView', 'editor')) === 'editor';
+    const profile = path.join(this.context.globalStorageUri.fsPath, 'edge-profile');
     try {
-      if ((this.browserViewOverride || this.config().get('browserView', 'editor')) === 'editor')
-        this.browserPanel.show();
+      if (embedded) this.browserPanel.show();
+      stage = 'profile';
+      if (!this.browser) {
+        await fs.mkdir(profile, { recursive: true });
+        this.browser = new CopilotBrowser({
+          profile,
+          url: config.get('copilotUrl'),
+          channel: config.get('browserChannel'),
+          embedded: (this.browserViewOverride || config.get('browserView', 'editor')) === 'editor',
+          composerSelector: config.get('composerSelector'),
+          sendButtonSelector: config.get('sendButtonSelector'),
+          responseSelector: config.get('responseSelector'),
+          timeoutSeconds: config.get('responseTimeoutSeconds'),
+          loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600),
+          modelButtonSelector: config.get('modelButtonSelector'),
+          onConversation: (info) => {
+            if (info.restorable) {
+              this.webUrl = info.url;
+              this.saveSession();
+              this.post({ type: 'webConversation', url: info.url });
+            }
+          },
+        });
+      }
+      stage = 'launch';
       await this.browser.connect();
+      this.lastConnectionFailure = null;
     } catch (error) {
-      throw new Error(
-        `M365 연결 실패: ${error.message}\nPC에 Edge가 설치되어 있고 회사 정책에서 브라우저 자동화가 허용되는지 확인하세요.`,
-        { cause: error },
+      const failure = connectionError(error, stage, {
+        profile,
+        channel: config.get('browserChannel', 'msedge'),
+        embedded,
+      });
+      this.lastConnectionFailure = failure.connectionFailure;
+      this.output.appendLine(
+        JSON.stringify({ type: 'connectionFailure', ...this.lastConnectionFailure }, null, 2),
       );
+      this.output.show(true);
+      this.browserPanel.notice(failure.message);
+      throw failure;
     }
     return this.browser;
   }
@@ -290,8 +303,40 @@ class AgentView {
     this.view?.webview.postMessage({ type: 'attachments', files: this.attachments });
   }
   async diagnostics() {
-    const browser = await this.ensureBrowser();
-    const data = await browser.diagnostics();
+    const config = this.config();
+    const environment = await environmentDiagnostics({
+      profile: path.join(this.context.globalStorageUri.fsPath, 'edge-profile'),
+      channel: config.get('browserChannel', 'msedge'),
+      embedded: (this.browserViewOverride || config.get('browserView', 'editor')) === 'editor',
+      version: require('../package.json').version,
+      vscodeVersion: vscode.version,
+    });
+    this.output.appendLine(
+      JSON.stringify(
+        {
+          type: 'connectionEnvironment',
+          ...environment,
+          lastFailure: this.lastConnectionFailure || this.browser?.lastConnectionFailure || null,
+        },
+        null,
+        2,
+      ),
+    );
+    this.output.show(true);
+    this.post({
+      type: 'message',
+      role: 'system',
+      text: `실행 환경 진단 · ${environment.version}\nOS: ${environment.platform}/${environment.architecture} · 브라우저: ${environment.channel} · 표시: ${environment.display}\n기본 설치 위치: ${environment.defaultExecutableFound === null ? '검사 대상 아님' : environment.defaultExecutableFound ? '확인됨' : '미확인'} · 전용 프로필 쓰기: ${environment.profileWritable ? '가능' : '실패'}${this.lastConnectionFailure ? '\n최근 실패: ' + this.lastConnectionFailure.code + ' · ' + this.lastConnectionFailure.stage : ''}${environment.profileError ? '\n' + environment.profileError : ''}`,
+    });
+    // Diagnostics must remain usable when launch/profile/panel creation failed.
+    if (!this.browser?.page || this.browser.page.isClosed()) return;
+    let data;
+    try {
+      data = await this.browser.diagnostics({ connect: false });
+    } catch (error) {
+      this.output.appendLine(connectionError(error, 'diagnostics', this.browser.options || {}).message);
+      return;
+    }
     this.output.appendLine(JSON.stringify(data, null, 2));
     this.output.show();
     this.post({
