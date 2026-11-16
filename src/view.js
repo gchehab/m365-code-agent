@@ -148,7 +148,8 @@ function renderWebview({ nonce, cspSource, resource }) {
 <p id="unlimitedRoundsHint" class="option-note">켜면 요청 횟수 한도만 해제합니다. 반복 감지·중지·승인 설정은 유지합니다.</p>
 <label class="auto-approve-option">
 <input type="checkbox" id="autoApprove" aria-describedby="autoApproveHint"> 승인 없이 진행</label>
-<p id="autoApproveHint" class="option-note">켜면 파일 변경·실행 설정·터미널 명령을 자동 승인합니다.</p>
+<p id="autoApproveHint" class="option-note">켜면 파일 변경·실행 설정·터미널 명령을 자동 승인합니다.
+명령은 사용자 권한으로 실행되며 프로젝트 밖 파일에도 영향을 줄 수 있습니다. 명령의 변경은 되돌리기에 포함되지 않습니다.</p>
 </details>
 </form>
 <p class="hint">Enter 전송 · Shift+Enter 줄바꿈</p>

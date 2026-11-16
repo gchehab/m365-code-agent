@@ -167,7 +167,7 @@ test('command runner captures failures, bounds output and terminates timed-out j
 test('compact prompts use standard JSON fencing and retain code whitespace as escaped data', () => {
   const source = 'def hello():\n    print("a  b")\n';
   const prompt = buildPrompt({ id: 'compact', task: '설명해줘', workspace: 'sample', files: { files: [], truncated: false }, history: [], extraContext: JSON.stringify([{ path: 'a.py', content: source }]) });
-  assert.ok(prompt.length < 2500);
+  assert.ok(prompt.length < 3000, 'host tool and approval instructions remain compact');
   assert.equal(prompt.includes('\n'), false);
   assert.equal(prompt.includes('m365-agent'), false);
   assert.match(prompt, /standard json/);

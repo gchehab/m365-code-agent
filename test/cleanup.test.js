@@ -3,13 +3,19 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const os = require('node:os');
 const { cleanTestOutput } = require('../scripts/clean-test-output.cjs');
 
-async function cleanupFixture(t) {
-  const output = path.resolve(__dirname, '..', '.test-output');
-  const repo = await fs.mkdtemp(path.join(output, 'cleanup-fixture-'));
+async function cleanupRepo(t) {
+  const output = await fs.realpath(os.tmpdir());
+  const repo = await fs.realpath(await fs.mkdtemp(path.join(output, 'm365-cleanup-fixture-')));
   t.after(async () => { assert.equal(path.dirname(repo), output); await fs.rm(repo, { recursive: true, force: true }); });
   const root = path.join(repo, '.test-output'); await fs.mkdir(root);
+  return { repo, root };
+}
+
+async function cleanupFixture(t) {
+  const { repo, root } = await cleanupRepo(t);
   const run = async (name, hours) => {
     const target = path.join(root, name); await fs.mkdir(target);
     await fs.writeFile(path.join(target, '.m365-test-run.json'), JSON.stringify({kind: 'm365-code-agent-integration', state: 'finished', pid: 2147483647}));
@@ -37,22 +43,25 @@ test('cleanup visits each selected tree only during planning and its own final v
 test('cleanup rechecks ownership of its target and keeps a run that becomes active after planning', async t => {
   const { repo, run } = await cleanupFixture(t);
   await run('integration-new', 0); const target = await run('integration-old', 72);
+  let ownershipChanged = false;
   const realpath = fs.realpath.bind(fs);
   t.mock.method(fs, 'realpath', async entry => {
     const value = await realpath(entry);
-    if (entry === path.join(target, 'payload.bin')) await fs.writeFile(path.join(target, '.m365-test-run.json'), JSON.stringify({kind: 'm365-code-agent-integration', state: 'running', pid: process.pid}));
+    if (entry === path.join(target, 'payload.bin')) {
+      ownershipChanged = true;
+      await fs.writeFile(path.join(target, '.m365-test-run.json'), JSON.stringify({kind: 'm365-code-agent-integration', state: 'running', pid: process.pid}));
+    }
     return value;
   });
-  const result = await cleanTestOutput(repo, { keep: 1, apply: true });
+  const inputRepo = process.platform === 'win32' ? repo.replace(/^[A-Z]:/i, drive => drive.toLowerCase()) : repo;
+  const result = await cleanTestOutput(inputRepo, { keep: 1, apply: true });
+  assert.equal(ownershipChanged, true, 'the ownership change must actually be exercised');
   assert.deepEqual(result.removed, []); assert.equal(result.removedBytes, 0);
   assert.equal(await fs.readFile(path.join(target, 'payload.bin'), 'utf8'), 'payload');
 });
 
 test('test-output cleanup defaults to dry run and retains recent, running, unknown and linked folders', async t => {
-  const output = path.resolve(__dirname, '..', '.test-output');
-  const repo = await fs.mkdtemp(path.join(output, 'cleanup-fixture-'));
-  t.after(async () => { assert.equal(path.dirname(repo), output); await fs.rm(repo, { recursive: true, force: true }); });
-  const root = path.join(repo, '.test-output'); await fs.mkdir(root);
+  const { repo, root } = await cleanupRepo(t);
   const now = Date.now(), old = new Date(now - 72 * 3600000);
   const run = async (name, marker) => {
     const target = path.join(root, name); await fs.mkdir(target);
@@ -80,10 +89,8 @@ test('test-output cleanup defaults to dry run and retains recent, running, unkno
 });
 
 test('cleanup accepts completed legacy runs and refuses a linked output root', async t => {
-  const output = path.resolve(__dirname, '..', '.test-output');
-  const repo = await fs.mkdtemp(path.join(output, 'cleanup-fixture-'));
-  t.after(async () => { assert.equal(path.dirname(repo), output); await fs.rm(repo, { recursive: true, force: true }); });
-  const root = path.join(repo, '.test-output'), oldRun = path.join(root, 'integration-legacy');
+  const { repo, root } = await cleanupRepo(t);
+  const oldRun = path.join(root, 'integration-legacy');
   await fs.mkdir(path.join(oldRun, 'workspace'), { recursive: true });
   await fs.writeFile(path.join(oldRun, 'vscode-test.log'), 'completed');
   await fs.writeFile(path.join(oldRun, 'workspace', 'vscode-test-result.json'), '{"ok":true}');
