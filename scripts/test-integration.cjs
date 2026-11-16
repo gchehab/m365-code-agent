@@ -15,7 +15,8 @@ const { runTests } = require('@vscode/test-electron');
   await writeMarker('running');
   const workspace = path.join(run, 'workspace');
   await fs.mkdir(workspace);
-  const log = createWriteStream(path.join(run, 'vscode-test.log'));
+  const logPath = path.join(run, 'vscode-test.log');
+  const log = createWriteStream(logPath);
   let result;
   try {
     result = await runTests({
@@ -37,9 +38,13 @@ const { runTests } = require('@vscode/test-electron');
       ],
     });
   } finally {
-    log.end();
+    await new Promise((resolve) => log.end(resolve));
     await writeMarker('finished');
-    console.log('VS Code test log: ' + path.join(run, 'vscode-test.log'));
+    console.log('VS Code test log: ' + logPath);
+    if (result !== 0) {
+      const output = await fs.readFile(logPath, 'utf8');
+      console.error('VS Code integration failure output (last 24,000 characters):\n' + output.slice(-24000));
+    }
   }
   if (result !== 0) throw new Error(`VS Code 테스트 종료 코드 ${result}`);
   const report = JSON.parse(await fs.readFile(path.join(workspace, 'vscode-test-result.json'), 'utf8'));
