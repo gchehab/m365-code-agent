@@ -1,8 +1,11 @@
 'use strict';
 const api = acquireVsCodeApi(),
   el = (id) => document.getElementById(id);
+const ui = (key) => window.M365_I18N?.ui?.[key] || key;
 let token = '',
   locked = false,
+  connected = false,
+  currentUrl = '',
   composing = false,
   frameTicket = 0,
   lastPointer = 0;
@@ -114,7 +117,31 @@ new ResizeObserver(() => {
   fitScreen();
   send({ type: 'resize', width: browserViewport.clientWidth, height: browserViewport.clientHeight });
 }).observe(browserViewport);
+function applyLanguage(i18nData) {
+  if (!i18nData) return;
+  window.M365_I18N = i18nData;
+  document.documentElement.lang = i18nData.htmlLang || i18nData.code || 'en';
+  if (el('browserNav')) el('browserNav').setAttribute('aria-label', ui('browserNavAriaLabel'));
+  for (const [id, key] of [
+    ['back', 'browserBack'],
+    ['forward', 'browserForward'],
+    ['reload', 'browserReload'],
+  ]) {
+    el(id).title = ui(key);
+    el(id).setAttribute('aria-label', ui(key));
+  }
+  el('pages').setAttribute('aria-label', ui('browserTabsAriaLabel'));
+  el('reconnect').textContent = ui('browserReconnect');
+  el('external').textContent = ui('browserExternal');
+  el('external').title = ui('browserExternalTitle');
+  browserCanvas.setAttribute('aria-label', ui('browserCanvasAriaLabel'));
+  keyboard.setAttribute('aria-label', ui('browserKeyboardAriaLabel'));
+  if (!currentUrl) el('address').textContent = ui('browserWaitingConnection');
+  el('notice').textContent = locked ? ui('browserLockedNotice') : ui('browserUnlockedNotice');
+  if (!connected && !el('empty').hidden) el('empty').textContent = ui('browserDisconnectedEmpty');
+}
 window.addEventListener('message', async ({ data }) => {
+  if (data.type === 'language') applyLanguage(data.i18n);
   if (data.type === 'requestResize') {
     fitScreen();
     send({ type: 'resize', width: browserViewport.clientWidth, height: browserViewport.clientHeight });
@@ -133,7 +160,7 @@ window.addEventListener('message', async ({ data }) => {
       token = data.token;
       el('empty').hidden = true;
     } catch {
-      el('notice').textContent = '화면을 다시 불러오고 있습니다…';
+      el('notice').textContent = ui('browserReloadingScreen');
     } finally {
       img.src = '';
       send({ type: 'frameAck', id: data.id, token: data.token });
@@ -141,17 +168,17 @@ window.addEventListener('message', async ({ data }) => {
   }
   if (data.type === 'browserState') {
     locked = data.locked;
-    el('address').textContent = data.url || '브라우저 연결 대기';
-    el('notice').textContent = locked
-      ? '에이전트가 작업 중입니다. 직접 조작하려면 M365 Agent에서 중지하세요.'
-      : '화면을 클릭해 로그인하거나 브라우저를 직접 조작하세요.';
+    connected = Boolean(data.connected);
+    currentUrl = data.url || '';
+    el('address').textContent = currentUrl || ui('browserWaitingConnection');
+    el('notice').textContent = locked ? ui('browserLockedNotice') : ui('browserUnlockedNotice');
     for (const id of ['back', 'forward', 'reload', 'pages']) el(id).disabled = locked || !data.connected;
     el('pages').replaceChildren(...(data.tabs || []).map((tab) => new Option(tab.title, tab.id)));
     el('pages').value = data.selected || '';
     if (!data.connected) {
       token = '';
       el('empty').hidden = false;
-      el('empty').textContent = '브라우저 연결을 기다리고 있습니다. 다시 연결을 누르세요.';
+      el('empty').textContent = ui('browserDisconnectedEmpty');
     }
   }
   if (data.type === 'browserNotice') el('notice').textContent = data.text;

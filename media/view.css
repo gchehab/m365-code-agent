@@ -18,6 +18,9 @@ header { min-height: 44px; }
 #readingOptions > summary { cursor: pointer; padding: 3px; }
 .reading-options { position: absolute; right: 0; top: 26px; z-index: 20; min-width: 200px; padding: 12px; border-radius: 8px; background: var(--vscode-menu-background,var(--vscode-sideBar-background)); border: 1px solid var(--vscode-panel-border); box-shadow: 0 6px 20px #0004; }
 .reading-options label { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.language-controls { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
+.language-controls > span { margin-right: auto; }
+.language-controls select { min-width: 0; max-width: 135px; padding: 3px 6px; font-size: 11px; background: var(--vscode-dropdown-background,var(--vscode-input-background)); color: var(--vscode-dropdown-foreground,var(--vscode-foreground)); }
 .font-controls { display: flex; gap: 6px; align-items: center; }
 .font-controls > span { margin-right: auto; }
 .font-controls button { padding: 3px 6px; }

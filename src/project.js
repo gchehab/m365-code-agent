@@ -1,22 +1,27 @@
 'use strict';
 const { rankFiles } = require('./search');
+const { t } = require('./i18n');
 
 async function inspectProject(store, task, maxCharacters = 120000, emit, cancelled = () => false, paths) {
   const id = 'project-scan';
-  emit({ type: 'tool', id, label: '프로젝트 파일 탐색', state: 'running' });
+  emit({ type: 'tool', id, label: t('toolProjectScan'), state: 'running' });
   const listing = store.discoverFiles
     ? await store.discoverFiles({ paths, cancelled })
     : await store.listFiles(1000);
   let retrieval;
   if (store.searchCode && listing.files.length) {
-    emit({ type: 'tool', id: 'project-search', label: '관련 코드 검색', state: 'running' });
+    emit({ type: 'tool', id: 'project-search', label: t('toolProjectSearch'), state: 'running' });
     retrieval = await store.searchCode(task, undefined, cancelled, listing);
     emit({
       type: 'tool',
       id: 'project-search',
-      label: '관련 코드 검색',
+      label: t('toolProjectSearch'),
       state: 'done',
-      detail: `${retrieval.indexedFiles}개 파일 색인 · 관련 파일 ${retrieval.matches.length}개${retrieval.truncated ? ' · 검색 범위 일부' : ''}`,
+      detail: t('toolProjectSearchDetail', {
+        indexed: retrieval.indexedFiles,
+        matches: retrieval.matches.length,
+        truncatedNote: retrieval.truncated ? t('toolProjectSearchTruncated') : '',
+      }),
     });
   }
   const ranked = [
@@ -26,7 +31,7 @@ async function inspectProject(store, task, maxCharacters = 120000, emit, cancell
   let remaining = Math.max(1000, Math.min(6000, Math.floor(maxCharacters * 0.4)));
   const initialReads = Math.max(1, Math.min(4, Math.floor(maxCharacters / 6000)));
   for (const file of ranked.slice(0, 12)) {
-    if (cancelled()) throw new Error('작업을 중지했습니다.');
+    if (cancelled()) throw new Error(t('errTaskStopped'));
     if (remaining < 300 || observations.filter((item) => item.result).length >= initialReads) break;
     emit({ type: 'tool', id: 'project:' + file, label: 'read_file · ' + file, state: 'running' });
     try {
@@ -47,7 +52,12 @@ async function inspectProject(store, task, maxCharacters = 120000, emit, cancell
         id: 'project:' + file,
         label: 'read_file · ' + file,
         state: 'done',
-        detail: `${result.content.length.toLocaleString()}자 · ${result.startLine}~${result.endLine}줄 읽음${result.complete ? ' · 전체' : ' · 일부'}`,
+        detail: t('toolReadRangeDetail', {
+          chars: result.content.length.toLocaleString(),
+          startLine: result.startLine,
+          endLine: result.endLine,
+          completeNote: result.complete ? t('toolReadComplete') : t('toolReadPartial'),
+        }),
       });
     } catch (error) {
       observations.push({ call: { name: 'read_file', path: file }, error: error.message });
@@ -60,7 +70,7 @@ async function inspectProject(store, task, maxCharacters = 120000, emit, cancell
           id: 'project:' + file,
           label: 'file_info · ' + file,
           state: 'done',
-          detail: `${result.size.toLocaleString()} bytes · 본문 대신 파일 해시 확인`,
+          detail: t('toolFileInfoInsteadDetail', { size: result.size.toLocaleString() }),
         });
       } catch {
         emit({
@@ -78,9 +88,14 @@ async function inspectProject(store, task, maxCharacters = 120000, emit, cancell
   emit({
     type: 'tool',
     id,
-    label: '프로젝트 파일 탐색',
+    label: t('toolProjectScan'),
     state: read || inspected ? 'done' : 'error',
-    detail: `${listing.files.length}개 발견${listing.truncated ? ' (목록 일부)' : ''} · ${read}개 본문 읽음${inspected ? ' · 파일 정보 ' + inspected + '개 확인' : ''}`,
+    detail: t('toolProjectScanDetail', {
+      discovered: listing.files.length,
+      truncatedNote: listing.truncated ? t('toolProjectScanTruncated') : '',
+      read,
+      inspectedNote: inspected ? t('toolProjectScanInspected', { inspected }) : '',
+    }),
   });
   return {
     files: {

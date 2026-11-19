@@ -20,7 +20,9 @@ el('fontLarger').addEventListener('click', () => {
   update();
 });
 el('wrapCode').addEventListener('change', update);
-el('copyResponse').addEventListener('click', () => reading.copy('', el('copyResponse'), 'copyResponse'));
+el('copyResponse').addEventListener('click', () =>
+  reading.copy('', el('copyResponse'), 'copyResponse', 'copyAnswer'),
+);
 window.addEventListener('message', ({ data }) => {
   if (data?.type === 'readingSettings') {
     size = data.readingSize;

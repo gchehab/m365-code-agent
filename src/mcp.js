@@ -1,6 +1,7 @@
 // @ts-check
 'use strict';
 const { createHash, randomUUID } = require('node:crypto');
+const { t } = require('./i18n');
 /** @typedef {import('../types/contracts').McpSession} McpSession */
 /** @typedef {{name: string, fingerprint: string}} Selection */
 /** @typedef {{name: string, description: string, inputSchema: object, fingerprint: string}} Tool */
@@ -12,7 +13,7 @@ function jsonValue(value, maxCharacters = 12000) {
   let entries = 0;
   /** @param {unknown} item @param {number} depth @returns {unknown} */
   const copy = (item, depth) => {
-    if (++entries > 2000 || depth > 20) throw new Error('MCP JSON 구조가 너무 큽니다.');
+    if (++entries > 2000 || depth > 20) throw new Error(t('errMcpJsonTooLarge'));
     if (item === null || typeof item === 'string' || typeof item === 'boolean') return item;
     if (typeof item === 'number' && Number.isFinite(item)) return item;
     if (Array.isArray(item)) return item.map((child) => copy(child, depth + 1));
@@ -22,10 +23,10 @@ function jsonValue(value, maxCharacters = 12000) {
           .sort()
           .map((key) => [key, copy(/** @type {Record<string, unknown>} */ (item)[key], depth + 1)]),
       );
-    throw new Error('MCP 인자에는 JSON 값만 사용할 수 있습니다.');
+    throw new Error(t('errMcpArgsJsonOnly'));
   };
   const result = copy(value, 0);
-  if (JSON.stringify(result).length > maxCharacters) throw new Error('MCP JSON 크기 제한을 초과했습니다.');
+  if (JSON.stringify(result).length > maxCharacters) throw new Error(t('errMcpJsonSizeLimitExceeded'));
   return result;
 }
 /** The public API exposes no trustworthy read-only capability flag. This is a
@@ -105,15 +106,12 @@ class McpBridge {
       this.host.sessionSwitching ||
       this.host.agent?.running
     )
-      throw new Error('진행 중인 작업을 마친 뒤 MCP 도구를 선택하세요.');
-    if (!this.vscode.workspace.isTrusted)
-      throw new Error('신뢰할 수 있는 프로젝트에서만 MCP를 설정할 수 있습니다.');
+      throw new Error(t('errSelectMcpAfterTask'));
+    if (!this.vscode.workspace.isTrusted) throw new Error(t('errMcpTrustedWorkspaceOnly'));
     const tools = this.available(),
       selected = this.selected();
     if (!tools.length) {
-      void this.vscode.window.showInformationMessage(
-        '사용 가능한 조회용 MCP 도구가 없습니다. VS Code에서 신뢰할 수 있는 MCP 서버를 연결·시작한 뒤 다시 선택하세요.',
-      );
+      void this.vscode.window.showInformationMessage(t('infoNoLookupMcpTools'));
       return;
     }
     const picks = await this.vscode.window.showQuickPick(
@@ -125,22 +123,21 @@ class McpBridge {
       })),
       {
         canPickMany: true,
-        title: 'M365 Agent · 조회용 MCP 도구 선택',
-        placeHolder:
-          '신뢰하는 조회·검색 도구만 선택하세요. 호출마다 인자를 승인하며 파일 수정은 기존 변경 검토를 사용합니다.',
+        title: t('pickMcpTitle'),
+        placeHolder: t('pickMcpPlaceholder'),
       },
     );
     if (!picks) return;
-    if (picks.length > 20) throw new Error('MCP 도구는 최대 20개까지 선택할 수 있습니다.');
+    if (picks.length > 20) throw new Error(t('errMcpMax20Tools'));
     if (this.host.starting || this.host.agent?.running || !this.vscode.workspace.isTrusted)
-      throw new Error('작업이 시작되었거나 신뢰 상태가 변경되었습니다. MCP 도구를 다시 선택하세요.');
+      throw new Error(t('errMcpSelectionStateChanged'));
     await this.host.context.workspaceState.update(
       'mcp.lookupTools',
       picks.map((item) => ({ name: item.tool.name, fingerprint: item.tool.fingerprint })),
     );
     this.host.post({
       type: 'status',
-      text: `조회용 MCP 도구 ${picks.length}개 선택됨 · 실행은 매번 승인합니다.`,
+      text: t('statusMcpToolsSelected', { count: picks.length }),
     });
   }
   /** @param {string} root @param {string} mode @returns {McpSession | undefined} */
@@ -165,22 +162,21 @@ class McpBridge {
     /** @param {string} name */
     const current = (name) => {
       const tool = tools.get(name);
-      if (stopped || this.host.stopRequested)
-        throw mcpError('MCP 도구 실행을 중지했습니다.', 'MCP_CANCELLED');
+      if (stopped || this.host.stopRequested) throw mcpError(t('errMcpCancelled'), 'MCP_CANCELLED');
       if (
         !this.vscode.workspace.isTrusted ||
         !tool ||
         !this.selected().some((item) => item.name === name && item.fingerprint === tool.fingerprint) ||
         !this.available().some((item) => item.name === name && item.fingerprint === tool.fingerprint)
       )
-        throw new Error('허용되지 않았거나 정의가 변경된 MCP 도구입니다. 도구를 다시 선택하세요.');
+        throw new Error(t('errMcpNotAllowedOrChanged'));
       return tool;
     };
     /** @type {McpSession} */
     const session = {
       list: (maxCharacters, offset = 0) => {
         if (!Number.isInteger(offset) || offset < 0 || offset > tools.size)
-          throw new Error('MCP 목록 offset은 도구 수 범위의 정수여야 합니다.');
+          throw new Error(t('errMcpOffsetInvalid'));
         const result = {
           tools: /** @type {{name: string, description: string}[]} */ ([]),
           truncated: false,
@@ -199,29 +195,25 @@ class McpBridge {
           }
           advertised.add(tool.name);
         }
-        if (!result.tools.length && offset < tools.size)
-          throw new Error('MCP 도구 목록을 전달할 문맥 예산이 부족합니다.');
+        if (!result.tools.length && offset < tools.size) throw new Error(t('errMcpListBudgetInsufficient'));
         return result;
       },
       info: (name, maxCharacters) => {
         const tool = current(name);
         const result = { name, description: tool.description.slice(0, 300), inputSchema: tool.inputSchema };
-        if (JSON.stringify(result).length > maxCharacters)
-          throw new Error('MCP 도구 스키마가 현재 문맥 예산보다 큽니다. 요청 예산을 늘리세요.');
+        if (JSON.stringify(result).length > maxCharacters) throw new Error(t('errMcpSchemaTooLarge'));
         advertised.add(name);
         return result;
       },
       invoke: async (name, input, maxCharacters) => {
         current(name);
-        if (!advertised.has(name))
-          throw new Error('먼저 mcp_list_tools 또는 mcp_tool_info로 제공된 도구를 확인하세요.');
+        if (!advertised.has(name)) throw new Error(t('errMcpInspectFirst'));
         const safeInput = /** @type {Record<string, unknown>} */ (jsonValue(input));
         if (!safeInput || typeof safeInput !== 'object' || Array.isArray(safeInput))
-          throw new Error('MCP input은 JSON 객체여야 합니다.');
+          throw new Error(t('errMcpInputMustBeObject'));
         const signature = JSON.stringify([name, safeInput]);
-        if (failed.has(signature))
-          throw new Error('실패하거나 거절된 같은 MCP 호출은 이 요청에서 자동으로 다시 실행하지 않습니다.');
-        if (this.host.pending) throw new Error('다른 승인 요청을 먼저 처리하세요.');
+        if (failed.has(signature)) throw new Error(t('errMcpDuplicateFailedCall'));
+        if (this.host.pending) throw new Error(t('errHandleOtherApprovalFirst'));
         const viewData = {
           type: 'commandApproval',
           approvalKind: 'mcp',
@@ -245,7 +237,7 @@ class McpBridge {
           failed.add(signature);
           return {
             approved: false,
-            message: '사용자가 MCP 실행을 거절했습니다. 같은 호출을 다시 요청하지 마세요.',
+            message: t('msgMcpRejectedByUser'),
           };
         }
         const cancellation = new this.vscode.CancellationTokenSource();
@@ -254,22 +246,12 @@ class McpBridge {
         const interrupted = new Promise((_, reject) => {
           cancelInvocation = () => {
             cancellation.cancel();
-            reject(
-              mcpError(
-                'MCP 실행을 중지했습니다. 원격 도구의 취소 완료는 보장하지 않습니다.',
-                'MCP_CANCELLED',
-              ),
-            );
+            reject(mcpError(t('errMcpCancelledRemoteWarning'), 'MCP_CANCELLED'));
           };
           timer = setTimeout(() => {
             stopped = true;
             cancellation.cancel();
-            reject(
-              mcpError(
-                'MCP 실행 시간이 초과됐습니다. 중지 신호를 보냈으며 실행 결과가 확인되지 않아 작업을 종료합니다.',
-                'MCP_UNCERTAIN',
-              ),
-            );
+            reject(mcpError(t('errMcpTimedOut'), 'MCP_UNCERTAIN'));
           }, this.timeoutMs);
         });
         try {
@@ -288,7 +270,7 @@ class McpBridge {
             !('content' in result) ||
             !Array.isArray(result.content)
           )
-            throw new Error('MCP 도구 결과 형식이 올바르지 않습니다.');
+            throw new Error(t('errMcpResultInvalid'));
           let output = '',
             omittedParts = Math.max(0, result.content.length - 100),
             truncated = false;

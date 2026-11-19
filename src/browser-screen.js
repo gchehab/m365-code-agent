@@ -1,13 +1,16 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
 const { validateCopilotUrl } = require('./browser');
+const { t } = require('./i18n');
 
 function displayUrl(value) {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin + url.pathname : '연결 준비 중';
+    return url.protocol === 'https:' || url.protocol === 'http:'
+      ? url.origin + url.pathname
+      : t('browserPreparingUrl');
   } catch {
-    return '연결 준비 중';
+    return t('browserPreparingUrl');
   }
 }
 
@@ -82,7 +85,7 @@ class BrowserScreen {
         this.emit(state);
       }
     } catch {
-      this.emit({ type: 'browserNotice', text: '브라우저 화면을 다시 연결하고 있습니다…' });
+      this.emit({ type: 'browserNotice', text: t('browserReconnectingScreen') });
     } finally {
       this.updating = false;
     }
@@ -189,7 +192,7 @@ class BrowserScreen {
     if (browser.automationActive) {
       this.emit({
         type: 'browserNotice',
-        text: '에이전트 작업 중에는 브라우저 입력을 잠급니다. 중지 후 직접 조작할 수 있습니다.',
+        text: t('browserInputLockedNotice'),
       });
       return;
     }

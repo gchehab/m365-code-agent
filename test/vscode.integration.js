@@ -9,6 +9,8 @@ async function run() {
   const extension = vscode.extensions.getExtension('jhoon-dev.m365-code-agent');
   assert.ok(extension, 'extension is loaded');
   const { provider, modelProvider } = await extension.activate();
+  assert.equal(require('../src/i18n').getLanguage(), 'en', 'extension defaults to English');
+  await provider.changeLanguage('ko', false);
   assert.equal(provider.newWebChat, !provider.webUrl, 'an unlinked initial VS Code chat must start its own web conversation');
   assert.ok(extension.packageJSON.contributes.viewsContainers.secondarySidebar.some(container => container.id === 'm365Agent'));
   assert.equal(extension.packageJSON.contributes.viewsContainers.activitybar, undefined);

@@ -1,5 +1,6 @@
 'use strict';
 const { createHash, randomUUID } = require('node:crypto');
+const { t } = require('./i18n');
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object')
@@ -96,7 +97,10 @@ class TaskProgress {
     if (history.length) history.at(-1).note = [history.at(-1).note, note].filter(Boolean).join(' ');
     if (this.stalls >= 2) {
       const error = new Error(
-        `새로운 도구 결과나 파일 적용 없이 같은 읽기·검증 실패·명령 결과가 반복되어 중지했습니다. 실제 적용한 파일: ${appliedFiles}개.${this.lastError ? ' 최근 원인: ' + this.lastError : ''}`,
+        t('errNoProgress', {
+          appliedFiles,
+          lastErrorNote: this.lastError ? t('errNoProgressLastError', { lastError: this.lastError }) : '',
+        }),
       );
       error.code = 'NO_PROGRESS';
       throw error;

@@ -13,6 +13,9 @@
     "types": ["node"]
   },
   "files": [
+    "src/i18n.js",
+    "src/locales/en.js",
+    "src/locales/ko.js",
     "src/workspace.js",
     "src/tool-call.js",
     "src/changes.js",

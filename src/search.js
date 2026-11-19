@@ -2,6 +2,7 @@
 'use strict';
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { t } = require('./i18n');
 /** @typedef {{text: string, line: number, column: number, frequencies: Map<string, number>, length: number}} Chunk */
 
 /** @param {string} name */
@@ -159,9 +160,9 @@ class ProjectIndex {
   /** @param {string} query @param {import('../types/contracts').FileDiscovery} listing @param {() => boolean} [cancelled] */
   async search(query, listing, cancelled = () => false) {
     if (typeof query !== 'string' || !query.trim() || query.length > 8000)
-      throw new Error('관련 코드 검색어는 1~8,000자여야 합니다.');
+      throw new Error(t('errSearchCodeQueryRange'));
     const check = () => {
-      if (cancelled()) throw new Error('작업을 중지했습니다.');
+      if (cancelled()) throw new Error(t('errTaskStopped'));
     };
     check();
     const names = rankFiles(listing.files, query),

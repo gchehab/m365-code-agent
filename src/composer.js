@@ -1,5 +1,6 @@
 'use strict';
 /* global getComputedStyle */
+const { t } = require('./i18n');
 
 const normalizeDraft = (text) =>
   text
@@ -74,7 +75,10 @@ async function readComposer(locator) {
 
 function promptLimitError(limit, expected) {
   const error = new Error(
-    `Copilot 입력 한도에 맞춰 요청을 줄여야 합니다. 요청 ${expected.toLocaleString()}자 / 확인된 한도 ${limit.toLocaleString()}자. 아직 전송하지 않았습니다.`,
+    t('errPromptLimitExceeded', {
+      expected: expected.toLocaleString(),
+      limit: limit.toLocaleString(),
+    }),
   );
   error.code = 'PROMPT_LIMIT';
   error.maxCharacters = limit;

@@ -1,4 +1,5 @@
 'use strict';
+require('../src/i18n').setLanguage('ko');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ConversationController } = require('../src/conversations');

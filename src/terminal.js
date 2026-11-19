@@ -2,6 +2,7 @@
 const { spawn } = require('node:child_process');
 const { TextDecoder } = require('node:util');
 const path = require('node:path');
+const { t } = require('./i18n');
 
 // Match Node's background-shell defaults, not VS Code's interactive terminal.
 /** @param {string} cwd */
@@ -21,9 +22,9 @@ function outputDecoder(encoding = 'utf8') {
 // The caller must obtain approval or an explicit user-selected automatic-approval policy.
 class CommandRunner {
   async run(command, cwd, onOutput = () => {}, timeoutMs = 120000) {
-    if (this.child) throw new Error('이미 명령이 실행 중입니다.');
+    if (this.child) throw new Error(t('errCommandAlreadyRunning'));
     if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command))
-      throw new Error('명령은 1~2,000자의 한 줄로 입력해야 합니다.');
+      throw new Error(t('errCommandSingleLineRange'));
     return new Promise((resolve, reject) => {
       let output = '',
         truncated = false,

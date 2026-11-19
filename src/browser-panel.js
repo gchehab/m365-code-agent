@@ -2,10 +2,27 @@
 const { randomBytes } = require('node:crypto');
 const { setInterval, clearInterval } = require('node:timers');
 const { BrowserScreen } = require('./browser-screen');
+const { getLanguagePack, t } = require('./i18n');
 
-function renderBrowserPanel(nonce, source, resource) {
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderBrowserPanel(nonce, source, resource, lang) {
+  const pack = getLanguagePack(lang);
+  const s = pack.ui;
+  const i18nPayload = JSON.stringify({
+    code: pack.code,
+    htmlLang: pack.htmlLang,
+    ui: s,
+  }).replace(/</g, '\\u003c');
+
   return `<!doctype html>
-<html lang="ko">
+<html lang="${escapeHtml(pack.htmlLang)}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -14,25 +31,26 @@ function renderBrowserPanel(nonce, source, resource) {
 </head>
 <body>
 <header>
-<nav aria-label="브라우저 탐색">
-<button id="back" title="뒤로" aria-label="뒤로">←</button>
-<button id="forward" title="앞으로" aria-label="앞으로">→</button>
-<button id="reload" title="새로 고침" aria-label="새로 고침">↻</button>
+<nav id="browserNav" aria-label="${escapeHtml(s.browserNavAriaLabel)}">
+<button id="back" title="${escapeHtml(s.browserBack)}" aria-label="${escapeHtml(s.browserBack)}">←</button>
+<button id="forward" title="${escapeHtml(s.browserForward)}" aria-label="${escapeHtml(s.browserForward)}">→</button>
+<button id="reload" title="${escapeHtml(s.browserReload)}" aria-label="${escapeHtml(s.browserReload)}">↻</button>
 </nav>
-<select id="pages" aria-label="브라우저 탭">
+<select id="pages" aria-label="${escapeHtml(s.browserTabsAriaLabel)}">
 </select>
-<button id="reconnect">다시 연결</button>
-<button id="external" title="진행 중인 작업을 중지하고 외부 브라우저로 전환합니다.">외부 브라우저로 전환</button>
+<button id="reconnect">${escapeHtml(s.browserReconnect)}</button>
+<button id="external" title="${escapeHtml(s.browserExternalTitle)}">${escapeHtml(s.browserExternal)}</button>
 </header>
 <div id="address">
 </div>
-<div id="notice" role="status">Copilot 연결 중… 로그인은 아래 화면에서 직접 진행하세요.</div>
+<div id="notice" role="status">${escapeHtml(s.browserInitialNotice)}</div>
 <main id="viewport">
-<canvas id="screen" aria-label="Copilot 브라우저 화면">
+<canvas id="screen" aria-label="${escapeHtml(s.browserCanvasAriaLabel)}">
 </canvas>
-<input type="password" id="keyboard" aria-label="브라우저 키보드 입력" autocomplete="off" autocapitalize="off" spellcheck="false">
-<div id="empty">브라우저 화면을 연결하고 있습니다…</div>
+<input type="password" id="keyboard" aria-label="${escapeHtml(s.browserKeyboardAriaLabel)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+<div id="empty">${escapeHtml(s.browserEmptyConnecting)}</div>
 </main>
+<script nonce="${nonce}">window.M365_I18N = ${i18nPayload};</script>
 <script nonce="${nonce}" src="${resource('browser-view.js')}">
 </script>
 </body>
@@ -46,13 +64,15 @@ class BrowserPanel {
   }
   show(preserveFocus = true) {
     const vscode = this.vscode;
+    const pack = getLanguagePack();
     if (this.panel) {
+      this.panel.title = pack.ui.browserPanelTitle;
       this.panel.reveal(undefined, preserveFocus);
       return;
     }
     const panel = vscode.window.createWebviewPanel(
       'm365Agent.browser',
-      'M365 Copilot 브라우저',
+      pack.ui.browserPanelTitle,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus },
       {
         enableScripts: true,
@@ -79,20 +99,18 @@ class BrowserPanel {
       if (message.type === 'external') {
         this.host
           .switchBrowserView('external')
-          .catch(() => this.notice('외부 브라우저 전환에 실패했습니다. 연결 설정을 확인하세요.'));
+          .catch(() => this.notice(t('browserSwitchExternalFailed')));
         return;
       }
       if (message.type === 'reconnect') {
         this.host
           .ensureBrowser()
-          .catch(() => this.notice('연결하지 못했습니다. M365 Agent의 연결 진단을 확인하세요.'));
+          .catch(() => this.notice(t('browserReconnectFailed')));
         return;
       }
       this.screen
         ?.handle(message)
-        .catch(() =>
-          this.notice('브라우저 동작을 완료하지 못했습니다. 화면 상태를 확인한 뒤 다시 시도하세요.'),
-        );
+        .catch(() => this.notice(t('browserActionFailed')));
     });
     panel.onDidChangeViewState(() => {
       if (this.panel === panel) {
@@ -106,6 +124,15 @@ class BrowserPanel {
         this.ready = false;
         this.pause();
       }
+    });
+  }
+  refreshLanguage() {
+    if (!this.panel) return;
+    const pack = getLanguagePack();
+    this.panel.title = pack.ui.browserPanelTitle;
+    this.panel.webview.postMessage({
+      type: 'language',
+      i18n: { code: pack.code, htmlLang: pack.htmlLang, ui: pack.ui },
     });
   }
   notice(text) {

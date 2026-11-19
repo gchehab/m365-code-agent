@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { digest } = require('./workspace');
 const { requiresReview } = require('./policy');
+const { t } = require('./i18n');
 /** @typedef {import('../types/contracts').PreparedChange} PreparedChange */
 /** @typedef {import('./workspace').WorkspaceStore} WorkspaceStore */
 /** @param {string} target */
@@ -38,7 +39,7 @@ class ChangeController {
           );
         })
       )
-        throw new Error(`저장하지 않은 변경이 있는 파일은 삭제·복원하지 않습니다: ${change.path}`);
+        throw new Error(t('errDirtyFileDeleteOrRestore', { path: change.path }));
     }
   }
   /** @param {WorkspaceStore} store @param {PreparedChange[]} changes */
@@ -93,7 +94,9 @@ class ChangeController {
             });
         }
       } catch (error) {
-        this.host.output?.appendLine(`삭제 상태 확인 실패 · ${change.path}: ${error.message}`);
+        this.host.output?.appendLine(
+          t('logDeleteCheckFailed', { path: change.path, message: error.message }),
+        );
       }
     }
     if (missing.length) this.recordCheckpoint(store, missing);
@@ -103,8 +106,8 @@ class ChangeController {
   async runCommand(command, root, autoApprove = false) {
     const host = this.host;
     if (typeof command !== 'string' || !command.trim() || command.length > 2000 || /[\0\r\n]/.test(command))
-      throw new Error('명령 형식이 올바르지 않습니다.');
-    if (host.stopRequested) throw new Error('작업을 중지했습니다.');
+      throw new Error(t('errInvalidCommandFormat'));
+    if (host.stopRequested) throw new Error(t('errTaskStopped'));
     const approved =
       autoApprove === true ||
       (await new Promise((resolve) => {
@@ -126,12 +129,12 @@ class ChangeController {
       host.post({ type: 'approvalClosed' });
     }
     if (!approved || host.stopRequested)
-      return { approved: false, message: '사용자가 실행을 거절했습니다. 다시 요청하지 마세요.' };
+      return { approved: false, message: t('msgCommandRejectedByUser') };
     if (autoApprove === true)
       host.post({
         type: 'message',
         role: 'system',
-        text: `승인 없이 진행 · 명령 실행\n${command}\n작업 폴더: ${root}`,
+        text: t('msgAutoApprovedCommand', { command, root }),
       });
     host.output.appendLine(`\n> ${command}\n${root}`);
     host.output.show(true);
@@ -184,7 +187,7 @@ class ChangeController {
     if (review) {
       host.post({
         type: 'status',
-        text: `파일 ${changes.length}개 변경 승인 대기 · diff를 확인하고 적용을 누르세요.`,
+        text: t('statusWaitingChangeApproval', { count: changes.length }),
       });
       const approved = await new Promise((resolve) => {
         host.pending = { kind: 'changes', resolve, changes, viewData };
@@ -221,12 +224,9 @@ class ChangeController {
         edit.insert(uri, new vscode.Position(0, 0), change.content);
       } else {
         const document = await vscode.workspace.openTextDocument(uri);
-        if (document.isDirty)
-          throw new Error(
-            `저장하지 않은 변경이 있는 파일입니다. 먼저 저장 후 다시 요청하세요: ${change.path}`,
-          );
+        if (document.isDirty) throw new Error(t('errUnsavedChangesSaveFirst', { path: change.path }));
         if (digest(document.getText()) !== change.expectedHash)
-          throw new Error(`파일이 변경되었습니다: ${change.path}`);
+          throw new Error(t('errFileModified', { path: change.path }));
         edit.replace(
           uri,
           new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
@@ -248,7 +248,7 @@ class ChangeController {
         (a, b) => b - a,
       )) {
         if (!applied) break;
-        if (host.stopRequested || host.agent?.cancelled) throw new Error('작업을 중지했습니다.');
+        if (host.stopRequested || host.agent?.cancelled) throw new Error(t('errTaskStopped'));
         this.assertNoDirtyDeletions(changes);
         const directoryEdit = new vscode.WorkspaceEdit();
         for (const name of directoryDeletes.filter((name) => name.split('/').length === depth))
@@ -266,7 +266,7 @@ class ChangeController {
       const partial = await this.preservePartialDeletes(store, changes);
       /** @type {Error & { code?: string }} */
       const error = new Error(
-        `VS Code가 변경을 완료하지 못했습니다.${partial ? ' 부분 삭제 ' + partial + '건의 백업을 보관했습니다. 되돌리기로 복원할 수 있습니다.' : ' 편집기에서 파일 상태를 확인하세요.'}`,
+        partial ? t('errVscodeApplyFailedPartial', { partial }) : t('errVscodeApplyFailed'),
         { cause: applyError },
       );
       if (partial) error.code = 'PARTIAL_DELETE';
@@ -278,8 +278,7 @@ class ChangeController {
       if (change.action === 'delete') {
         change.appliedHash = null;
         change.diskHash = null;
-        if (await exists(change.target))
-          throw new Error(`삭제를 확인하지 못했습니다. 현재 파일 상태를 확인하세요: ${change.path}`);
+        if (await exists(change.target)) throw new Error(t('errDeleteNotConfirmed', { path: change.path }));
         continue;
       }
       const document = await vscode.workspace.openTextDocument(uri);
@@ -290,15 +289,16 @@ class ChangeController {
         .then(digest)
         .catch(() => null);
     }
-    if (failed.length)
-      throw new Error(
-        `편집기에 적용했지만 저장하지 못한 파일이 있습니다: ${failed.join(', ')}. 직접 확인하세요.`,
-      );
+    if (failed.length) throw new Error(t('errAppliedButSaveFailed', { files: failed.join(', ') }));
     const deleted = changes.filter((change) => change.action === 'delete').length;
     host.post({
       type: 'message',
       role: 'system',
-      text: `${autoApprove === true ? '승인 없이 진행 · ' : ''}${changes.length}개 파일 변경을 적용했습니다.${deleted ? ' 삭제 ' + deleted + '개.' : ' 저장 완료.'} 테스트는 실행하지 않았습니다.`,
+      text: t('msgChangesApplied', {
+        autoPrefix: autoApprove === true ? t('msgChangesAppliedAutoPrefix') : '',
+        count: changes.length,
+        deleteNote: deleted ? t('msgChangesAppliedDeleted', { deleted }) : t('msgChangesAppliedSaved'),
+      }),
     });
     host.post({ type: 'applied' });
     return true;
@@ -306,7 +306,7 @@ class ChangeController {
   async undo() {
     const host = this.host;
     const vscode = this.vscode;
-    if (host.starting || host.agent?.running) throw new Error('작업 완료 후 되돌릴 수 있습니다.');
+    if (host.starting || host.agent?.running) throw new Error(t('errUndoAfterTask'));
     const checkpoint = host.checkpoints.at(-1);
     if (!checkpoint) return;
     const edit = new vscode.WorkspaceEdit();
@@ -320,7 +320,7 @@ class ChangeController {
       const uri = vscode.Uri.file(change.target);
       if (change.action === 'delete') {
         if ((!change.directory || !change.partialDirectory) && (await exists(change.target)))
-          throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
+          throw new Error(t('errPathRecreatedAfterDelete', { path: change.path }));
         if (change.directory) {
           if (change.partialDirectory) {
             const stat = await fs.stat(change.target);
@@ -328,18 +328,18 @@ class ChangeController {
               !stat.isDirectory() ||
               `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` !== change.directorySnapshot.identity
             )
-              throw new Error(`부분 삭제 후 폴더가 바뀌어 복원하지 않습니다: ${change.path}`);
+              throw new Error(t('errFolderChangedAfterPartialDelete', { path: change.path }));
           }
           for (const name of change.directorySnapshot.directories) {
             const resolved = await checkpoint.store.resolve(name, true);
             if (await exists(resolved.target))
-              throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${name}`);
+              throw new Error(t('errPathRecreatedAfterDelete', { path: name }));
             restoreDirectories.push({ path: name, target: resolved.target });
           }
           for (const file of change.directorySnapshot.files) {
             const resolved = await checkpoint.store.resolve(file.path, true);
             if (await exists(resolved.target))
-              throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${file.path}`);
+              throw new Error(t('errPathRecreatedAfterDelete', { path: file.path }));
             edit.createFile(vscode.Uri.file(resolved.target), {
               overwrite: false,
               ignoreIfExists: false,
@@ -361,7 +361,7 @@ class ChangeController {
         digest(document.getText()) !== change.appliedHash ||
         digest(await fs.readFile(change.target, 'utf8')) !== change.diskHash
       )
-        throw new Error(`이후 편집이 있어 되돌릴 수 없습니다: ${change.path}`);
+        throw new Error(t('errCannotUndoSubsequentEdits', { path: change.path }));
       if (change.action === 'create') edit.deleteFile(uri, { recursive: false });
       else {
         edit.replace(
@@ -378,7 +378,7 @@ class ChangeController {
     )) {
       await checkpoint.store.resolve(directory.path, true);
       if (await exists(directory.target))
-        throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${directory.path}`);
+        throw new Error(t('errPathRecreatedAfterDelete', { path: directory.path }));
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(directory.target));
       await checkpoint.store.resolve(directory.path);
     }
@@ -387,11 +387,10 @@ class ChangeController {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(change.target)));
       await checkpoint.store.resolve(change.path, true);
       if (await exists(change.target))
-        throw new Error(`삭제 후 같은 경로가 다시 생겨 덮어쓰지 않습니다: ${change.path}`);
+        throw new Error(t('errPathRecreatedAfterDelete', { path: change.path }));
     }
     this.assertNoDirtyDeletions(checkpoint.changes);
-    if (editNeeded && !(await vscode.workspace.applyEdit(edit)))
-      throw new Error('되돌리기를 적용하지 못했습니다.');
+    if (editNeeded && !(await vscode.workspace.applyEdit(edit))) throw new Error(t('errUndoApplyFailed'));
     host.checkpoints.pop();
     for (const change of checkpoint.changes) {
       const key = checkpoint.store.root.toLowerCase() + '\0' + change.path.toLowerCase();
@@ -412,11 +411,11 @@ class ChangeController {
     }
     for (const uri of saves)
       if (!(await (await vscode.workspace.openTextDocument(uri)).save()))
-        throw new Error('되돌린 내용을 저장하지 못했습니다. 편집기를 확인하세요.');
+        throw new Error(t('errUndoSaveFailed'));
     host.post({
       type: 'message',
       role: 'system',
-      text: '마지막 파일 변경을 되돌렸습니다. 터미널에서 발생한 변경은 포함하지 않습니다.',
+      text: t('msgUndoCompleted'),
     });
     host.post({ type: 'undoState', available: host.checkpoints.length > 0 });
   }

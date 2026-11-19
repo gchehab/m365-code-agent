@@ -10,6 +10,12 @@ let reviewToken, commandToken;
 let pendingTask = saved.pendingTask || null;
 const tools = new Map();
 let sessions = [];
+let currentAttachments = [];
+let currentModels = [];
+let currentSelectedModel = '';
+let currentProgress = null;
+let currentWebUrl = '';
+let hasWorkspace = false;
 let activityGroup,
   activeSessionId,
   hasHistory = false,
@@ -17,6 +23,17 @@ let activityGroup,
 let followTail = true;
 let readingSize = Number.isFinite(saved.readingSize) ? Math.min(18, Math.max(12, saved.readingSize)) : 14;
 const reading = window.M365Reading(api);
+
+function ui(key, params) {
+  const template = window.M365_I18N?.ui?.[key] ?? key;
+  if (!params) return template;
+  return template.replace(/\{(\w+)\}/g, (match, name) =>
+    Object.hasOwn(params, name) && params[name] !== undefined && params[name] !== null
+      ? String(params[name])
+      : match,
+  );
+}
+
 el('wrapCode').checked = saved.wrapCode !== false;
 function applyReading() {
   document.documentElement.style.setProperty('--reading-font-size', readingSize + 'px');
@@ -40,6 +57,11 @@ el('wrapCode').addEventListener('change', () => {
   applyReading();
   persist();
 });
+if (el('language')) {
+  el('language').addEventListener('change', () => {
+    api.postMessage({ type: 'selectLanguage', language: el('language').value });
+  });
+}
 el('composerOptions').open = saved.composerOptions === true;
 el('composerOptions').addEventListener('toggle', persist);
 el('task').value = saved.draft || '';
@@ -51,13 +73,14 @@ function syncPreferences() {
   const automatic = activePolicy?.autoApprove ?? el('autoApprove').checked;
   const review = activePolicy?.review ?? el('review').checked;
   el('roundMode').hidden = !(activePolicy?.unlimitedRounds ?? el('unlimitedRounds').checked);
+  el('roundMode').textContent = ui('unlimitedBadge');
   el('approvalMode').textContent = automatic
     ? activePolicy?.mcpRequiresApproval
-      ? '로컬 자동 승인 · MCP 매번 승인'
-      : '승인 없이 진행'
+      ? ui('approvalModeAutoMcp')
+      : ui('approvalModeAuto')
     : review
-      ? '승인 켜짐'
-      : '일반 파일 자동 적용';
+      ? ui('approvalModeOn')
+      : ui('approvalModeAutoFiles');
   el('approvalMode').classList.toggle('auto-apply', automatic || !review);
   el('review').disabled = running || automatic;
   el('form').classList.toggle('auto-approval', automatic);
@@ -143,11 +166,16 @@ function activity() {
   return activityGroup;
 }
 function updateActivity(group) {
-  const running = group.querySelectorAll('.tool[data-state="running"]').length;
+  const runningCount = group.querySelectorAll('.tool[data-state="running"]').length;
   const failed = group.querySelectorAll('.tool[data-state="error"]').length;
-  group.querySelector('.activity-title').textContent =
-    `작업 기록 · ${group.querySelector('.activity-items').children.length}개`;
-  group.querySelector('.activity-status').textContent = failed ? '확인 필요' : running ? '진행 중' : '';
+  group.querySelector('.activity-title').textContent = ui('activityTitle', {
+    count: group.querySelector('.activity-items').children.length,
+  });
+  group.querySelector('.activity-status').textContent = failed
+    ? ui('activityNeedsAttention')
+    : runningCount
+      ? ui('activityRunning')
+      : '';
   group.classList.toggle('has-error', Boolean(failed));
 }
 function message(event) {
@@ -164,8 +192,9 @@ function message(event) {
     const summary = document.createElement('summary');
     summary.textContent = `${{ running: '◌', done: '✓', error: '!' }[event.state]} ${event.label}`;
     card.dataset.state = event.state;
+    card.dataset.hasCustomDetail = event.detail ? 'true' : 'false';
     const detail = document.createElement('pre');
-    detail.textContent = event.detail || (event.state === 'running' ? '작업 중…' : '완료');
+    detail.textContent = event.detail || (event.state === 'running' ? ui('toolRunning') : ui('toolDone'));
     card.replaceChildren(summary, detail);
     const group = card.closest('.activity');
     updateActivity(group);
@@ -178,10 +207,12 @@ function message(event) {
   }
   const card = document.createElement('article');
   card.className = event.role;
+  card.dataset.role = event.role;
   const label = document.createElement('strong');
   label.className = 'message-role';
   label.textContent =
-    { user: '나', assistant: 'M365 Copilot', system: '작업 기록' }[event.role] || event.role;
+    { user: ui('roleUser'), assistant: ui('roleAssistant'), system: ui('roleSystem') }[event.role] ||
+    event.role;
   card.append(label);
   const body = document.createElement('div');
   if (event.role === 'assistant' && typeof event.html === 'string') {
@@ -198,11 +229,13 @@ function message(event) {
     const actions = document.createElement('div');
     actions.className = 'message-actions';
     const copy = document.createElement('button');
-    copy.textContent = '답변 복사';
-    copy.addEventListener('click', () => reading.copy(event.text, copy));
+    copy.className = 'copy-answer-button';
+    copy.textContent = ui('copyAnswer');
+    copy.addEventListener('click', () => reading.copy(event.text, copy, 'copyCode', 'copyAnswer'));
     const expand = document.createElement('button');
-    expand.textContent = '크게 보기';
-    expand.title = '편집기 탭에서 답변 읽기';
+    expand.className = 'expand-answer-button';
+    expand.textContent = ui('expandAnswer');
+    expand.title = ui('expandAnswerTitle');
     expand.addEventListener('click', () =>
       api.postMessage({
         type: 'openResponse',
@@ -225,13 +258,14 @@ function message(event) {
   followEnd();
 }
 function attachments(files) {
+  currentAttachments = files || [];
   el('attachments').replaceChildren();
-  for (const path of files) {
+  for (const path of currentAttachments) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'chip';
     chip.textContent = `${path.split(/[\\/]/).at(-1)} ×`;
-    chip.title = `${path} · 클릭하여 첨부 해제`;
+    chip.title = ui('removeAttachmentTitle', { path });
     chip.addEventListener('click', () => api.postMessage({ type: 'removeAttachment', path }));
     el('attachments').append(chip);
   }
@@ -246,7 +280,7 @@ el('form').addEventListener('submit', (event) => {
   if (!task || running || composing) return;
   followEnd(true);
   busy(true);
-  el('status').textContent = '작업 준비 중…';
+  el('status').textContent = ui('statusPreparing');
   el('status').classList.remove('error');
   el('changes').hidden = true;
   pendingTask = { id: crypto.randomUUID(), task };
@@ -338,9 +372,10 @@ function renderSessions() {
   if (!filtered.length) {
     const empty = document.createElement('p');
     empty.className = 'history-empty';
-    empty.textContent = sessions.length ? '일치하는 대화가 없습니다.' : '저장된 대화가 없습니다.';
+    empty.textContent = sessions.length ? ui('historyEmptyNoMatch') : ui('historyEmptyNone');
     el('sessionList').append(empty);
   }
+  const dateLocale = window.M365_I18N?.dateLocale || 'en-US';
   for (const item of filtered) {
     const row = document.createElement('article');
     row.className = 'session-row';
@@ -358,12 +393,18 @@ function renderSessions() {
     });
     const meta = document.createElement('p');
     meta.className = 'session-meta';
-    meta.textContent = `${item.active ? '현재 대화 · ' : ''}${new Date(item.updated).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · 메시지 ${item.count}개${item.linked ? ' · 웹 연결' : ''}`;
+    const formattedDate = new Date(item.updated).toLocaleString(dateLocale, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    meta.textContent = `${item.active ? ui('sessionCurrentPrefix') : ''}${formattedDate}${ui('sessionMessagesCount', { count: item.count })}${item.linked ? ui('sessionWebLinked') : ''}`;
     const actions = document.createElement('div');
     actions.className = 'session-actions';
     for (const [type, label] of [
-      ['renameSession', '이름 변경'],
-      ['deleteSession', '삭제'],
+      ['renameSession', ui('renameSession')],
+      ['deleteSession', ui('deleteSession')],
     ]) {
       const button = document.createElement('button');
       button.textContent = label;
@@ -414,17 +455,154 @@ for (const button of document.querySelectorAll('.suggestion'))
   });
 el('model').addEventListener('change', () => api.postMessage({ type: 'selectModel', id: el('model').value }));
 function models(choices, selected) {
-  el('model').replaceChildren(new Option('M365 웹의 현재 모델', ''));
-  for (const choice of choices || []) el('model').append(new Option(choice.label, choice.id));
-  el('model').value = selected || '';
+  currentModels = choices || [];
+  currentSelectedModel = selected || '';
+  el('model').replaceChildren(new Option(ui('defaultModelOption'), ''));
+  for (const choice of currentModels) el('model').append(new Option(choice.label, choice.id));
+  el('model').value = currentSelectedModel;
 }
 function progress(value) {
+  currentProgress = value || null;
   el('roundProgress').hidden = !value;
   el('roundProgress').textContent = value
-    ? `Copilot 요청 ${value.round}회 · ${value.unlimited === true ? '무제한' : '안전 한도 ' + value.total + '회'}`
+    ? value.unlimited === true
+      ? ui('roundProgressUnlimited', { round: value.round })
+      : ui('roundProgressLimited', { round: value.round, total: value.total })
     : '';
 }
+function updateWebSync(url) {
+  currentWebUrl = url || '';
+  el('webSync').textContent = currentWebUrl ? ui('webSyncConnected') : ui('webSyncDefault');
+  el('webSync').title = currentWebUrl
+    ? ui('webSyncConnectedTitle', { url: currentWebUrl })
+    : ui('webSyncDefaultTitle');
+}
+function applyLanguage(i18nData) {
+  if (!i18nData) return;
+  window.M365_I18N = i18nData;
+  document.documentElement.lang = i18nData.htmlLang || i18nData.code || 'en';
+  if (el('language')) {
+    if (Array.isArray(i18nData.availableLanguages)) {
+      el('language').replaceChildren(
+        ...i18nData.availableLanguages.map((item) => new Option(item.label, item.code)),
+      );
+    }
+    el('language').value = i18nData.code || 'en';
+    el('language').title = ui('languageTitle');
+    el('language').setAttribute('aria-label', ui('languageLabel'));
+  }
+  document.querySelector('header nav.toolbar')?.setAttribute('aria-label', ui('toolbarAriaLabel'));
+  for (const [id, key] of [
+    ['newChat', 'newChat'],
+    ['history', 'history'],
+    ['more', 'more'],
+    ['closeHistory', 'closeHistory'],
+  ]) {
+    if (el(id)) {
+      el(id).title = ui(key);
+      el(id).setAttribute('aria-label', ui(key));
+    }
+  }
+  el('showBrowser').textContent = ui('showBrowser');
+  el('editorBrowser').textContent = ui('editorBrowser');
+  const syncSvg = el('syncWeb').querySelector('svg');
+  el('syncWeb').replaceChildren(...(syncSvg ? [syncSvg] : []), document.createTextNode(ui('syncWeb')));
+  el('checkWorkspace').textContent = ui('checkWorkspace');
+  el('checkWorkspace').title = ui('checkWorkspaceTitle');
+  const diagSvg = el('diagnostics').querySelector('svg');
+  el('diagnostics').replaceChildren(
+    ...(diagSvg ? [diagSvg] : []),
+    document.createTextNode(ui('diagnostics')),
+  );
+  el('mcpTools').textContent = ui('mcpTools');
+  el('historyPanel').setAttribute('aria-label', ui('history'));
+  if (el('historyHeadingText')) el('historyHeadingText').textContent = ui('history');
+  if (el('historyNoteText')) el('historyNoteText').textContent = ui('historyNote');
+  el('historySearch').placeholder = ui('historySearchPlaceholder');
+  el('historySearch').setAttribute('aria-label', ui('historySearchPlaceholder'));
+  el('deleteAllSessions').textContent = ui('deleteAllSessions');
+  if (!hasWorkspace) {
+    el('workspaceName').textContent = ui('workspaceUnverified');
+    el('workspaceName').title = ui('workspacePathTitle');
+  }
+  if (el('readingOptionsSummary')) el('readingOptionsSummary').textContent = ui('readingSettings');
+  if (el('languageLabel')) el('languageLabel').textContent = ui('languageLabel');
+  if (el('fontSizeLabel')) el('fontSizeLabel').textContent = ui('fontSize');
+  el('fontSmaller').setAttribute('aria-label', ui('fontSmaller'));
+  el('fontLarger').setAttribute('aria-label', ui('fontLarger'));
+  if (el('wrapCodeLabel')) el('wrapCodeLabel').textContent = ui('wrapCode');
+  el('messages').setAttribute('aria-label', ui('conversationAriaLabel'));
+  el('jumpToLatest').textContent = ui('jumpToLatest');
+  if (el('welcomeTitleText')) el('welcomeTitleText').textContent = ui('welcomeTitle');
+  if (el('welcomeSubtitleText')) el('welcomeSubtitleText').textContent = ui('welcomeSubtitle');
+  if (el('suggestionExplore')) {
+    el('suggestionExplore').textContent = ui('suggestionExploreLabel');
+    el('suggestionExplore').dataset.prompt = ui('suggestionExplorePrompt');
+  }
+  if (el('suggestionReview')) {
+    el('suggestionReview').textContent = ui('suggestionReviewLabel');
+    el('suggestionReview').dataset.prompt = ui('suggestionReviewPrompt');
+  }
+  el('apply').textContent = ui('apply');
+  el('reject').textContent = ui('reject');
+  el('rejectCommand').textContent = ui('reject');
+  if (el('lastFileChangeLabel')) el('lastFileChangeLabel').textContent = ui('lastFileChange');
+  el('undo').textContent = ui('undo');
+  if (el('taskSrLabel')) el('taskSrLabel').textContent = ui('taskLabel');
+  el('task').placeholder = ui('taskPlaceholder');
+  el('attach').textContent = ui('attachFiles');
+  el('attach').title = ui('attachFilesTitle');
+  el('attachLocal').textContent = ui('attachLocal');
+  el('attachLocal').title = ui('attachLocalTitle');
+  el('connect').textContent = ui('connect');
+  el('connect').title = ui('connectTitle');
+  el('stop').textContent = ui('stop');
+  el('run').title = ui('sendTitle');
+  if (el('composerOptionsSummaryText'))
+    el('composerOptionsSummaryText').textContent = ui('composerOptionsSummary');
+  if (el('modelSrLabel')) el('modelSrLabel').textContent = ui('modelLabel');
+  el('model').title = ui('modelTitle');
+  el('refreshModels').textContent = ui('refreshModels');
+  el('refreshModels').title = ui('refreshModelsTitle');
+  if (el('includeEditorLabel')) el('includeEditorLabel').textContent = ui('includeEditor');
+  if (el('reviewLabelWrapper')) el('reviewLabelWrapper').title = ui('reviewChangesTitle');
+  if (el('reviewChangesLabel')) el('reviewChangesLabel').textContent = ui('reviewChanges');
+  if (el('unlimitedRoundsLabel')) el('unlimitedRoundsLabel').textContent = ui('unlimitedRounds');
+  el('unlimitedRoundsHint').textContent = ui('unlimitedRoundsHint');
+  if (el('autoApproveLabel')) el('autoApproveLabel').textContent = ui('autoApprove');
+  el('autoApproveHint').textContent = ui('autoApproveHint');
+  if (el('composerHintText')) el('composerHintText').textContent = ui('composerHint');
+  for (const group of el('messages').querySelectorAll('.activity')) updateActivity(group);
+  for (const card of el('messages').querySelectorAll('article[data-role]')) {
+    const role = card.dataset.role;
+    const roleEl = card.querySelector('.message-role');
+    if (roleEl)
+      roleEl.textContent =
+        { user: ui('roleUser'), assistant: ui('roleAssistant'), system: ui('roleSystem') }[role] || role;
+    const copyBtn = card.querySelector('.copy-answer-button');
+    if (copyBtn) copyBtn.textContent = ui('copyAnswer');
+    const expandBtn = card.querySelector('.expand-answer-button');
+    if (expandBtn) {
+      expandBtn.textContent = ui('expandAnswer');
+      expandBtn.title = ui('expandAnswerTitle');
+    }
+  }
+  for (const toolCard of el('messages').querySelectorAll('.tool')) {
+    if (toolCard.dataset.hasCustomDetail === 'false') {
+      const pre = toolCard.querySelector('pre');
+      if (pre) pre.textContent = toolCard.dataset.state === 'running' ? ui('toolRunning') : ui('toolDone');
+    }
+  }
+  reading.refreshLanguage();
+  attachments(currentAttachments);
+  models(currentModels, currentSelectedModel);
+  renderSessions();
+  progress(currentProgress);
+  updateWebSync(currentWebUrl);
+  syncPreferences();
+}
 window.addEventListener('message', ({ data }) => {
+  if (data.type === 'language') applyLanguage(data.i18n);
   if (data.type === 'message' || data.type === 'tool') message(data);
   if (data.type === 'status') {
     el('status').textContent = data.text;
@@ -449,12 +627,10 @@ window.addEventListener('message', ({ data }) => {
     renderSessions();
   }
   if (data.type === 'webConversation') {
-    el('webSync').textContent = data.url ? '웹 기록 연결됨' : 'M365 Copilot';
-    el('webSync').title = data.url
-      ? '5초마다 현재 웹 대화 동기화 · ' + data.url
-      : '연결된 웹 대화를 5초마다 확인합니다.';
+    updateWebSync(data.url);
   }
   if (data.type === 'history') {
+    if (data.i18n) applyLanguage(data.i18n);
     const same = hasHistory && activeSessionId === data.sessionId;
     const oldTop = el('messages').scrollTop,
       wasFollowing = followTail;
@@ -515,6 +691,7 @@ window.addEventListener('message', ({ data }) => {
     }
   }
   if (data.type === 'workspace') {
+    hasWorkspace = true;
     el('workspaceName').textContent = data.name;
     el('workspaceName').title = data.path;
   }
@@ -522,9 +699,9 @@ window.addEventListener('message', ({ data }) => {
   if (data.type === 'changes') {
     reviewToken = data.token;
     el('reviewReason').textContent = data.autoApproved
-      ? '승인 없이 진행 · 검증 후 자동 적용합니다.'
+      ? ui('reviewReasonAuto')
       : data.forcedReview?.length
-        ? '파일 삭제·실행 설정 변경은 자동 적용 설정과 관계없이 검토가 필요합니다.'
+        ? ui('reviewReasonForced')
         : '';
     el('changes').hidden = false;
     el('changeTitle').textContent = data.summary;
@@ -532,8 +709,8 @@ window.addEventListener('message', ({ data }) => {
     for (const file of data.files) {
       const button = document.createElement('button');
       button.className = 'file' + (file.action === 'delete' ? ' deleted-file' : '');
-      button.textContent = `${file.action === 'delete' ? (file.directory ? 'D · 폴더 삭제' : 'D · 삭제') : file.action === 'create' ? '+' : 'M'}  ${file.path}${file.binary ? ' (바이너리)' : ''}`;
-      button.title = file.action === 'delete' ? '삭제할 파일 미리보기' : 'VS Code에서 diff 열기';
+      button.textContent = `${file.action === 'delete' ? (file.directory ? ui('deleteFolderBadge') : ui('deleteFileBadge')) : file.action === 'create' ? '+' : 'M'}  ${file.path}${file.binary ? ui('binarySuffix') : ''}`;
+      button.title = file.action === 'delete' ? ui('previewDeletedTitle') : ui('openDiffTitle');
       button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id }));
       el('changeFiles').append(button);
     }
@@ -543,33 +720,29 @@ window.addEventListener('message', ({ data }) => {
   if (data.type === 'reviewClosed') closeReview();
   if (data.type === 'commandApproval') {
     const mcp = data.approvalKind === 'mcp';
-    el('approvalTitle').textContent = mcp ? 'MCP 도구 실행 승인' : '명령 실행 승인';
-    el('approveCommand').textContent = mcp ? '이번 도구 실행' : '이번 명령 실행';
+    el('approvalTitle').textContent = mcp ? ui('mcpApprovalTitle') : ui('commandApprovalTitle');
+    el('approveCommand').textContent = mcp ? ui('approveMcpTool') : ui('approveCommand');
     el('approvalNote').hidden = !mcp;
-    el('approvalNote').textContent = mcp
-      ? '선택한 도구의 인자를 MCP 서버에 전송합니다. 서버가 직접 만든 변경은 이 확장의 diff·되돌리기 대상이 아니므로 조회 전용 서버만 사용하세요.'
-      : '';
+    el('approvalNote').textContent = mcp ? ui('mcpApprovalNote') : '';
     commandToken = data.token;
     el('approval').hidden = false;
     el('commandText').textContent = data.command;
     el('commandRoot').textContent = mcp
-      ? `도구: ${data.tool} · 프로젝트: ${data.root}`
-      : `작업 폴더: ${data.root}`;
-    el('status').textContent = mcp ? 'MCP 도구 실행 승인 대기 중' : '명령 실행 승인 대기 중';
+      ? ui('mcpCommandRoot', { tool: data.tool, root: data.root })
+      : ui('normalCommandRoot', { root: data.root });
+    el('status').textContent = mcp ? ui('statusWaitingMcpApproval') : ui('statusWaitingCommandApproval');
     el('commandChanges').replaceChildren();
     if (data.changedFiles?.length) {
       for (const currentTask of [true, false]) {
         const files = data.changedFiles.filter((file) => Boolean(file.currentTask) === currentTask);
         if (!files.length) continue;
         const title = document.createElement('p');
-        title.textContent =
-          (currentTask ? '이번 요청에서 변경한 파일' : '이전 요청에서 변경한 파일') +
-          ' · 파일명을 눌러 diff 검토';
+        title.textContent = currentTask ? ui('changedFilesCurrentTask') : ui('changedFilesEarlierTask');
         el('commandChanges').append(title);
         for (const file of files) {
           const button = document.createElement('button');
           button.className = 'file';
-          button.textContent = `${file.action === 'delete' ? '삭제 · ' : ''}${file.sensitive ? '실행 설정 · ' : ''}${file.path}`;
+          button.textContent = `${file.action === 'delete' ? ui('changedFileDeletePrefix') : ''}${file.sensitive ? ui('changedFileSensitivePrefix') : ''}${file.path}`;
           button.disabled = !file.id;
           button.addEventListener('click', () => api.postMessage({ type: 'preview', id: file.id }));
           el('commandChanges').append(button);

@@ -1,6 +1,7 @@
 'use strict';
 /* global getComputedStyle */
 const { createHash } = require('node:crypto');
+const { t } = require('./i18n');
 
 // This function runs in the composer frame. Only composer-local attachment
 // cards count; previously submitted files in the conversation are excluded.
@@ -166,10 +167,7 @@ async function openUpload(browser, frame, files) {
         const selected = await chooser;
         if (selected) {
           const target = await uploadTarget(selected.element(), files, selected);
-          if (!target)
-            throw new Error(
-              `Copilot 파일 선택창이 ${files[0].name} 형식을 지원하지 않습니다. 파일에 맞는 첨부 입력창 선택자를 설정하세요. 요청은 전송하지 않았습니다.`,
-            );
+          if (!target) throw new Error(t('errChooserUnsupportedFormat', { name: files[0].name }));
           return target;
         }
         const input = await findInput(browser, frame, files);
@@ -183,27 +181,21 @@ async function openUpload(browser, frame, files) {
     if (!clicked) break;
   }
   if (opened) await browser.page.keyboard.press('Escape');
-  throw new Error(
-    '요청한 파일 형식을 지원하는 Copilot의 로컬 파일 첨부 입력창을 찾지 못했습니다. 이 계정의 파일 첨부 지원 여부와 첨부 선택자 설정을 확인하세요. 요청은 전송하지 않았습니다.',
-  );
+  throw new Error(t('errUploadInputNotFound'));
 }
 
 async function waitReady(browser, locator, names, onStatus) {
   const deadline = Date.now() + (browser.options.attachmentTimeoutMs ?? 120000);
   while (Date.now() < deadline) {
-    if (browser.cancelled) throw new Error('작업을 중지했습니다.');
+    if (browser.cancelled) throw new Error(t('errTaskStopped'));
     const state = await snapshot(browser, locator);
     if (state.errors.length)
-      throw new Error(
-        `Copilot 파일 첨부 실패: ${state.errors.join(' ').slice(0, 500)}. 요청은 전송하지 않았습니다.`,
-      );
+      throw new Error(t('errCopilotAttachmentFailed', { errors: state.errors.join(' ').slice(0, 500) }));
     if (!state.busy && names.every((name) => state.labels.some((label) => label.includes(name)))) return;
-    onStatus(`파일 업로드 확인 중 · ${names.length}개`);
+    onStatus(t('statusVerifyingUpload', { count: names.length }));
     await browser.page.waitForTimeout(200);
   }
-  throw new Error(
-    'Copilot 화면에서 모든 파일의 업로드 완료를 확인하지 못했습니다. 파일 형식·크기·조직 정책과 첨부 완료 선택자를 확인하세요. 요청은 전송하지 않았습니다.',
-  );
+  throw new Error(t('errUploadCompletionUnconfirmed'));
 }
 
 async function prepareAttachments(browser, locator, frame, id, files = [], onStatus = () => {}) {
@@ -220,14 +212,14 @@ async function prepareAttachments(browser, locator, frame, id, files = [], onSta
         !file.buffer.length,
     )
   )
-    throw new Error('첨부 파일의 이름·형식·본문이 올바르지 않습니다.');
+    throw new Error(t('errInvalidAttachmentMetadata'));
   if (new Set(files.map((file) => file.name)).size !== files.length)
-    throw new Error('첨부 파일 이름이 중복됩니다. 서로 다른 이름을 사용하세요.');
+    throw new Error(t('errDuplicateAttachmentNames'));
   let state = await snapshot(browser, locator);
   const settleDeadline = Date.now() + Math.min(browser.options.attachmentTimeoutMs ?? 120000, 5000);
   while (state.busy && !state.labels.length && !state.errors.length && Date.now() < settleDeadline) {
-    if (browser.cancelled) throw new Error('작업을 중지했습니다.');
-    onStatus('Copilot 첨부 입력창 준비를 기다리고 있습니다…');
+    if (browser.cancelled) throw new Error(t('errTaskStopped'));
+    onStatus(t('statusWaitingAttachmentInput'));
     await browser.page.waitForTimeout(150);
     state = await snapshot(browser, locator);
   }
@@ -247,13 +239,8 @@ async function prepareAttachments(browser, locator, frame, id, files = [], onSta
   }
   if (pending) {
     if (pending.id !== id || pending.signature !== signature(files) || pending.url !== browser.page.url())
-      throw new Error(
-        '이전 요청의 미전송 첨부가 남아 있습니다. 전용 Copilot 창에서 첨부를 정리한 뒤 페이지를 새로고침하세요.',
-      );
-    if (!pending.uploaded)
-      throw new Error(
-        '이전 파일 업로드의 완료 여부가 불확실합니다. 중복 업로드하지 않았습니다. 전용 Copilot 창에서 첨부를 정리한 뒤 페이지를 새로고침하세요.',
-      );
+      throw new Error(t('errUnsentPendingAttachments'));
+    if (!pending.uploaded) throw new Error(t('errUncertainPendingAttachments'));
     await waitReady(
       browser,
       locator,
@@ -262,16 +249,13 @@ async function prepareAttachments(browser, locator, frame, id, files = [], onSta
     );
     return;
   }
-  if (state.labels.length || state.busy)
-    throw new Error(
-      'Copilot 입력창에 기존 첨부 파일이 있습니다. 덮어쓰거나 함께 전송하지 않았습니다. 전용 창에서 첨부를 먼저 정리하세요.',
-    );
+  if (state.labels.length || state.busy) throw new Error(t('errExistingComposerAttachments'));
   if (!files.length) return;
   if (state.errors.length)
-    throw new Error(`Copilot 첨부 오류를 먼저 정리하세요: ${state.errors.join(' ').slice(0, 500)}`);
-  onStatus(`Copilot에 파일 ${files.length}개를 업로드하고 있습니다…`);
+    throw new Error(t('errClearAttachmentErrorsFirst', { errors: state.errors.join(' ').slice(0, 500) }));
+  onStatus(t('statusUploadingFilesToCopilot', { count: files.length }));
   const target = await openUpload(browser, frame, files);
-  if (browser.cancelled) throw new Error('작업을 중지했습니다.');
+  if (browser.cancelled) throw new Error(t('errTaskStopped'));
   browser.pendingAttachments = {
     id,
     signature: signature(files),
@@ -283,7 +267,7 @@ async function prepareAttachments(browser, locator, frame, id, files = [], onSta
   let remaining = files;
   const names = [];
   while (remaining.length) {
-    if (browser.cancelled) throw new Error('작업을 중지했습니다.');
+    if (browser.cancelled) throw new Error(t('errTaskStopped'));
     const upload = names.length === 0 ? target : await openUpload(browser, frame, remaining);
     if (upload.input) await upload.input.setInputFiles(upload.files, { timeout: 15000 });
     else await upload.chooser.setFiles(upload.files, { timeout: 15000 });
@@ -297,17 +281,14 @@ async function prepareAttachments(browser, locator, frame, id, files = [], onSta
 async function verifyAttachments(browser, locator, id) {
   const pending = browser.pendingAttachments;
   if (!pending) return;
-  if (pending.id !== id || !pending.uploaded)
-    throw new Error('첨부 업로드 완료 상태가 현재 요청과 일치하지 않습니다. 요청은 전송하지 않았습니다.');
+  if (pending.id !== id || !pending.uploaded) throw new Error(t('errAttachmentStateMismatch'));
   const state = await snapshot(browser, locator);
   if (
     state.busy ||
     state.errors.length ||
     !pending.names.every((name) => state.labels.some((label) => label.includes(name)))
   )
-    throw new Error(
-      '전송 직전 첨부 파일이 변경되었거나 업로드 오류가 발생했습니다. 요청은 전송하지 않았습니다.',
-    );
+    throw new Error(t('errAttachmentChangedBeforeSend'));
 }
 
 module.exports = { prepareAttachments, verifyAttachments, attachmentSnapshot };

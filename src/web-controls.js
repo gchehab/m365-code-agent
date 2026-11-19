@@ -1,6 +1,7 @@
 'use strict';
 const { conversationUrl, historyMessages } = require('./web-history');
 const { inspectControls } = require('./controls');
+const { t } = require('./i18n');
 
 const modelName =
   /\b(auto|smart|gpt|claude|openai|anthropic|gemini|quick response|think deeper|reasoning)\b|자동|스마트|빠른 응답|심층|추론|깊이/i;
@@ -22,9 +23,7 @@ async function trigger(browser) {
       }
     }
   }
-  throw new Error(
-    '이 M365 화면에서 모델 선택 메뉴를 찾지 못했습니다. 웹에서 해당 계정에 모델 선택이 표시되는지 확인하세요.',
-  );
+  throw new Error(t('errModelMenuNotFound'));
 }
 async function visibleItems(frame) {
   const items = [];
@@ -81,13 +80,12 @@ async function listModels(browser) {
     for (let i = 0; i < 3; i++) await browser.page.keyboard.press('Escape');
   }
   browser.modelChoices = [...new Map(choices.map((choice) => [choice.id, choice])).values()];
-  if (!browser.modelChoices.length)
-    throw new Error('모델 메뉴는 열었지만 선택 가능한 모델을 읽지 못했습니다. 현재 웹 모델을 유지합니다.');
+  if (!browser.modelChoices.length) throw new Error(t('errModelMenuNoSelectableModels'));
   return browser.modelChoices;
 }
 async function selectModel(browser, id) {
   const choice = browser.modelChoices?.find((value) => value.id === id);
-  if (!choice) throw new Error('모델 목록을 먼저 불러오세요. 계정에 표시된 모델만 선택할 수 있습니다.');
+  if (!choice) throw new Error(t('errLoadModelListFirst'));
   if (choice.native) await (await trigger(browser)).button.selectOption(choice.id);
   else await openPath(browser, choice.path);
   browser.selectedModel = choice.label;
