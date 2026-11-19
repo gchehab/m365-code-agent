@@ -2,6 +2,7 @@
 
 ## 0.16.0
 
+- Accept legitimate Windows 8.3 file paths while rejecting symbolic links and directory junctions through filesystem-entry checks.
 - Recognize native Bebop attachment cards whose filenames exist only in accessibility labels, and distinguish informational OneDrive upload notices from actual failures. Wait for an empty loading composer to settle while preserving existing-draft protection.
 - Validate image, PDF, Word, Excel and sampled video analysis through the installed VSIX sidebar/file chooser/Run flow in VS Code 1.147.0 with a signed-in company Copilot account and synthetic fixtures.
 

@@ -87,3 +87,30 @@ test('same-name files retain distinct upload names and video cancellation cleans
   const after = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('m365-attachment-') && !name.startsWith('m365-attachment-test-') && !before.has(name));
   assert.deepEqual(after, []);
 });
+
+test('Windows short filename aliases are accepted as ordinary selected files', async t => {
+  if (process.platform !== 'win32') return t.skip('Windows 8.3 alias behavior');
+  const { write } = await fixture(t);
+  const bytes = Buffer.from('ordinary binary attachment');
+  const file = await write('attachment-with-a-long-filename.pdf', bytes);
+  const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$f = New-Object -ComObject Scripting.FileSystemObject; $f.GetFile($env:M365_ATTACHMENT_TEST_PATH).ShortPath'], { windowsHide: true, timeout: 30000, env: { ...process.env, M365_ATTACHMENT_TEST_PATH: file } });
+  const shortPath = stdout.trim();
+  assert.ok(shortPath);
+  if (shortPath.toLowerCase() === file.toLowerCase()) return t.skip('8.3 aliases disabled on this filesystem');
+  assert.notEqual((await fs.realpath(shortPath)).toLowerCase(), shortPath.toLowerCase());
+  const prepared = await prepareAttachments([shortPath]);
+  assert.deepEqual(prepared.uploads[0].buffer, bytes);
+  assert.equal(prepared.uploads[0].mimeType, 'application/pdf');
+});
+
+test('attachments reject linked parent directories including Windows junctions', async t => {
+  const { root } = await fixture(t);
+  const actual = path.join(root, 'actual');
+  await fs.mkdir(actual);
+  await fs.writeFile(path.join(actual, 'report.pdf'), 'ordinary data');
+  const alias = path.join(root, 'directory-alias');
+  await fs.symlink(actual, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal((await fs.lstat(alias)).isSymbolicLink(), true);
+  await assert.rejects(prepareAttachments([path.join(alias, 'report.pdf')]), /링크/);
+  assert.equal((await prepareAttachments([path.join(actual, 'report.pdf')])).uploads[0].buffer.toString(), 'ordinary data');
+});

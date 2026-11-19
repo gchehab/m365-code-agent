@@ -38,15 +38,25 @@ function attachmentKind(file) {
 function checkCancelled(cancelled) {
   if (cancelled()) throw new Error('파일 첨부를 중지했습니다.');
 }
+async function inspectAttachmentPath(resolved) {
+  // realpath can expand legitimate Windows 8.3 aliases (for example RUNNER~1).
+  // Inspect actual filesystem entries instead of treating different spellings as links.
+  const root = path.parse(resolved).root;
+  let current = root;
+  let stat;
+  for (const component of resolved.slice(root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) throw new Error('링크 경로는 첨부할 수 없습니다.');
+  }
+  return stat || (await fs.lstat(root));
+}
 async function readAttachment(file, maxFileBytes, cancelled) {
   checkCancelled(cancelled);
   if (typeof file !== 'string' || !path.isAbsolute(file))
     throw new Error('첨부 파일은 직접 선택한 절대 경로여야 합니다.');
   const resolved = path.resolve(file);
-  const real = await fs.realpath(resolved);
-  const normalize = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
-  if (normalize(real) !== normalize(resolved)) throw new Error('링크 경로는 첨부할 수 없습니다.');
-  const before = await fs.lstat(resolved);
+  const before = await inspectAttachmentPath(resolved);
   if (!before.isFile() || before.isSymbolicLink()) throw new Error('일반 파일만 첨부할 수 있습니다.');
   if (!before.size || before.size > maxFileBytes)
     throw new Error(
