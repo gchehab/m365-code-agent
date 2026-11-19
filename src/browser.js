@@ -12,6 +12,7 @@ const { scanResponses, defaultResponses } = require('./responses');
 const { conversationUrl } = require('./web-history');
 const { inspectControls, firstReadyControl, anyReadyControl } = require('./controls');
 const { connectionError } = require('./connection');
+const { prepareAttachments, verifyAttachments } = require('./browser-attachments');
 
 const allowedHosts = new Set([
   'm365.cloud.microsoft',
@@ -315,6 +316,7 @@ class CopilotBrowser {
       }
       await this.verifyInput(locator, prompt);
       if (this.cancelled) throw new Error('작업을 중지했습니다.');
+      await verifyAttachments(this, locator, id);
       this.lastSend.stage = 'clicked';
       // Pin one DOM element and attempt a real click only once. Even if the page
       // replaces it during dispatch, inspect acknowledgement rather than re-clicking.
@@ -472,6 +474,7 @@ class CopilotBrowser {
       throw new Error(
         '웹 입력창에 작성 중인 내용이 있어 대화를 전환하지 않았습니다. 초안을 먼저 정리하세요.',
       );
+    await prepareAttachments(this, composer.locator, composer.frame, '', []);
   }
   async resumeConversation(value) {
     const target = conversationUrl(validateCopilotUrl(value));
@@ -485,7 +488,13 @@ class CopilotBrowser {
     if (this.conversationInfo().url !== target.url)
       throw new Error('원래 웹 대화로 복원되지 않아 요청을 중단했습니다. 새 웹 대화를 만들지 않았습니다.');
   }
-  async request(prompt, id, onStatus = () => {}, protocol = { parseReply, mergeReplies, replyIdentity }) {
+  async request(
+    prompt,
+    id,
+    onStatus = () => {},
+    protocol = { parseReply, mergeReplies, replyIdentity },
+    requestOptions = {},
+  ) {
     const { parseReply, mergeReplies, replyIdentity } = protocol;
     if (this.busy) throw new Error('이미 Copilot 응답을 기다리는 중입니다.');
     this.busy = true;
@@ -518,9 +527,11 @@ class CopilotBrowser {
         onStatus('Copilot에 요청을 보내고 있습니다…');
         try {
           await this.writePrompt(locator, prompt);
+          await prepareAttachments(this, locator, frame, id, requestOptions.attachments, onStatus);
           if (this.cancelled) throw new Error('작업을 중지했습니다.');
           await this.submitPrompt(locator, frame, prompt, baseline, id);
           submitted = true;
+          this.pendingAttachments = null;
           break;
         } catch (error) {
           if (

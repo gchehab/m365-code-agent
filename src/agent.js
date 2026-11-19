@@ -24,8 +24,10 @@ class CodingAgent {
     autoApprove = false,
     unlimitedRounds = false,
     maxRounds = 100,
-    maxPromptCharacters = 12000,
+    maxPromptCharacters = 120000,
     initialPaths,
+    attachments = [],
+    attachmentContext = [],
     mcp,
   }) {
     this.store = store;
@@ -41,6 +43,8 @@ class CodingAgent {
     this.maxRounds = Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100;
     this.maxPromptCharacters = maxPromptCharacters;
     this.initialPaths = initialPaths;
+    this.attachments = attachments;
+    this.attachmentContext = attachmentContext;
     this.mcp = mcp;
     this.cancelled = false;
     this.running = false;
@@ -67,6 +71,7 @@ class CodingAgent {
     );
     let appliedFiles = 0;
     const progress = new TaskProgress();
+    let attachmentsSubmitted = false;
     try {
       this.emit({ type: 'message', role: 'user', text: task });
       const project = await inspectProject(
@@ -114,6 +119,7 @@ class CodingAgent {
             files,
             history,
             extraContext,
+            attachments: this.attachmentContext,
             mode: this.mode,
             intent: this.intent,
             autoApprove: this.autoApprove,
@@ -122,7 +128,14 @@ class CodingAgent {
             maxCharacters: promptBudget,
           });
           try {
-            reply = await this.transport.request(prompt, id, (text) => this.emit({ type: 'status', text }));
+            reply = await this.transport.request(
+              prompt,
+              id,
+              (text) => this.emit({ type: 'status', text }),
+              undefined,
+              { attachments: attachmentsSubmitted ? [] : this.attachments },
+            );
+            attachmentsSubmitted = true;
             break;
           } catch (error) {
             if (
@@ -400,6 +413,7 @@ class CodingAgent {
         `안전 한도 ${this.maxRounds}회에 도달해 중지했습니다. 실제 적용한 파일: ${appliedFiles}개. 적용 내역은 유지됩니다. 필요한 작업을 이어서 요청하거나 m365Agent.maxRounds를 조정하세요.`,
       );
     } finally {
+      this.attachments = [];
       this.mcp?.dispose();
       this.running = false;
       this.emit({ type: 'idle' });

@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read, edit and delete files in a VS Code workspace.",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -186,7 +186,7 @@
       "properties": {
         "m365Agent.experimental.modelProvider.maxPromptCharacters": {
           "type": "number",
-          "default": 60000,
+          "default": 120000,
           "minimum": 4000,
           "maximum": 120000,
           "scope": "application",
@@ -240,7 +240,7 @@
         },
         "m365Agent.maxPromptCharacters": {
           "type": "number",
-          "default": 12000,
+          "default": 120000,
           "minimum": 4000,
           "maximum": 120000,
           "description": "웹에 보낼 요청의 최대 글자 수. 입력창 한도가 더 작으면 전송 전에 문맥을 자동으로 줄입니다."
@@ -284,6 +284,52 @@
           ],
           "default": "editor",
           "description": "Copilot 브라우저 표시 위치. editor는 VS Code 편집기 탭에 실제 자동화 브라우저 화면을 표시합니다. 외부 인증 창이 필요한 환경에서는 external을 사용하세요."
+        },
+        "m365Agent.attachmentMaxFileSizeMB": {
+          "type": "number",
+          "default": 64,
+          "minimum": 1,
+          "maximum": 512,
+          "description": "이미지·문서·동영상 원본 파일 하나의 최대 크기(MB). 실제 Copilot 웹 업로드 한도가 우선합니다."
+        },
+        "m365Agent.attachmentMaxTotalSizeMB": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1024,
+          "description": "한 요청에서 선택한 원본 첨부 파일의 합계 최대 크기(MB). 동영상은 로컬에서 장면 3개를 추출해 업로드합니다."
+        },
+        "m365Agent.attachmentTimeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 5,
+          "maximum": 600,
+          "description": "Copilot 화면에서 첨부 업로드 완료를 확인하는 대기 시간(초)."
+        },
+        "m365Agent.attachmentInputSelector": {
+          "type": "string",
+          "default": "",
+          "description": "자동 감지가 실패할 때 지정할 Copilot 로컬 파일 업로드 input[type=file] CSS 선택자."
+        },
+        "m365Agent.attachmentButtonSelector": {
+          "type": "string",
+          "default": "",
+          "description": "자동 감지가 실패할 때 지정할 Copilot 로컬 파일 첨부 메뉴 버튼 CSS 선택자."
+        },
+        "m365Agent.attachmentReadySelector": {
+          "type": "string",
+          "default": "",
+          "description": "업로드된 파일 이름이 표시되는 입력창 안 첨부 카드 CSS 선택자."
+        },
+        "m365Agent.attachmentErrorSelector": {
+          "type": "string",
+          "default": "",
+          "description": "입력창 안 파일 업로드 오류 메시지 CSS 선택자."
+        },
+        "m365Agent.attachmentScopeSelector": {
+          "type": "string",
+          "default": "",
+          "description": "입력창과 첨부 카드·업로드 상태를 포함하는 Copilot 작성 영역의 CSS 선택자. 대화 이력은 포함하지 마세요."
         }
       }
     }
@@ -301,6 +347,7 @@
     "clean:test-output": "node scripts/clean-test-output.cjs"
   },
   "dependencies": {
+    "ffmpeg-static": "5.3.0",
     "ignore": "7.0.14",
     "markdown-it": "15.0.3",
     "playwright-core": "1.65.1"

@@ -528,6 +528,109 @@ async function run() {
   await assert.rejects(provider.stageAndApply(store, changes, 'must reject', true, true), /저장하지 않은/);
   assert.equal(document.getText(), current);
   await document.save();
+  // Native attachments travel as byte snapshots, never as JSON/base64 prompt bodies.
+  assert.match(provider.view.webview.html, /id="attachLocal"[^>]*>이미지·문서·동영상<\/button>/);
+  const attachmentBrowser = provider.browser, attachmentSelection = provider.attachments, attachmentPost = provider.post;
+  const attachmentEvents = [], attachmentRequests = [];
+  const attachmentDirectory = path.join(root, 'native-attachment-fixtures');
+  const outsideAttachments = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'm365-host-attachment-'));
+  await fs.mkdir(attachmentDirectory);
+  const attachmentBytes = new Map([
+    ['picture.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0ioAAAAASUVORK5CYII=', 'base64')],
+    ['report.pdf', Buffer.from('%PDF-1.4\n%native PDF transport fixture\n%%EOF')],
+    ['report.docx', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01, 0x00, 0x02])],
+    ['report.xlsx', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x03, 0x00, 0x04])],
+  ]);
+  try {
+    for (const [name, bytes] of attachmentBytes) await fs.writeFile(path.join(attachmentDirectory, name), bytes);
+    provider.post = function(event) { attachmentEvents.push(event); return attachmentPost.call(this, event); };
+    provider.attachments = [...attachmentBytes.keys()].map(name => 'native-attachment-fixtures/' + name);
+    provider.browser = {
+      async connect() {}, async stop() {}, async close() {},
+      async request(prompt, id, status, protocol, options) {
+        const data = JSON.parse(prompt.split('DATA: ')[1]);
+        attachmentRequests.push({ prompt, data, options });
+        return attachmentRequests.length === 1
+          ? { kind: 'tools', calls: [{ name: 'read_file', path: 'src/menu-target.js', startLine: 1, lineCount: 1 }] }
+          : { kind: 'done', message: 'native attachment transport verified' };
+      },
+    };
+    await provider.start({ task: '/ask 첨부 이미지와 PDF, Word, Excel을 비교해줘.', includeEditor: false });
+    assert.equal(attachmentEvents.findLast(event => event.type === 'runResult').success, true);
+    assert.equal(attachmentRequests.length, 2);
+    const firstAttachments = attachmentRequests[0].options.attachments;
+    assert.deepEqual(firstAttachments.map(upload => upload.name), [...attachmentBytes.keys()]);
+    assert.deepEqual(firstAttachments.map(upload => upload.mimeType), ['image/png', 'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
+    for (const upload of firstAttachments) assert.deepEqual(upload.buffer, attachmentBytes.get(upload.name));
+    assert.deepEqual(attachmentRequests[1].options.attachments, [], 'tool round-trips reuse the uploaded files');
+    assert.deepEqual(attachmentRequests[1].data.attachments, attachmentRequests[0].data.attachments);
+    assert.equal(attachmentRequests[0].data.context.length, 0, 'binary files bypass text decoding');
+    for (const metadata of attachmentRequests[0].data.attachments) {
+      assert.equal(metadata.path, undefined); assert.equal(metadata.buffer, undefined); assert.equal(metadata.content, undefined);
+      assert.deepEqual(metadata.uploadedFiles, [metadata.name]);
+    }
+    assert.equal(attachmentRequests[0].prompt.includes(attachmentBytes.get('picture.png').toString('base64')), false);
+    assert.deepEqual(provider.agent.attachments, [], 'finished tasks release native upload buffers');
+
+    const externalPdf = path.join(outsideAttachments, 'external.pdf'), externalPdfBytes = Buffer.from('%PDF-1.4\n%explicit external bytes\n%%EOF');
+    await fs.writeFile(externalPdf, externalPdfBytes);
+    provider.attachments = [externalPdf]; attachmentRequests.length = 0;
+    provider.browser.request = async (prompt, id, status, protocol, options) => {
+      const data = JSON.parse(prompt.split('DATA: ')[1]); attachmentRequests.push({ prompt, data, options });
+      assert.equal(prompt.includes(outsideAttachments), false);
+      return { kind: 'done', message: 'external native selection verified' };
+    };
+    await provider.start({ task: '/ask 이 외부 PDF를 요약해줘.', includeEditor: false });
+    assert.equal(attachmentEvents.findLast(event => event.type === 'runResult').success, true);
+    assert.equal(attachmentRequests.length, 1);
+    assert.deepEqual(attachmentRequests[0].options.attachments[0].buffer, externalPdfBytes);
+    assert.equal(attachmentRequests[0].data.attachments[0].name, 'external.pdf');
+    assert.equal(attachmentRequests[0].prompt.includes('explicit external bytes'), false);
+
+    // Native editor actions retain the sidebar selection but do not upload it.
+    const selectedAttachments = provider.attachments;
+    attachmentRequests.length = 0;
+    await provider.start({ task: '/ask 선택 코드를 설명해줘.', includeEditor: false,
+      editorTarget: { document: menuDocument, version: menuDocument.version, range: new vscode.Range(0, 0, 0, 5) } });
+    assert.equal(attachmentEvents.findLast(event => event.type === 'runResult').success, true);
+    assert.equal(attachmentRequests.length, 1);
+    assert.deepEqual(attachmentRequests[0].options.attachments, []);
+    assert.equal(attachmentRequests[0].data.attachments, undefined);
+    assert.equal(attachmentRequests[0].data.context[0].path, 'src/menu-target.js');
+    assert.equal(provider.attachments, selectedAttachments);
+
+    // Exercise real local video decoding inside the extension host, not a mocked decoder.
+    const videoPath = path.join(outsideAttachments, 'recording.mp4');
+    await require('node:util').promisify(require('node:child_process').execFile)(require('ffmpeg-static'), [
+      '-hide_banner', '-loglevel', 'error', '-nostdin', '-f', 'lavfi', '-i',
+      'testsrc2=size=160x90:rate=5:duration=3', '-c:v', 'mpeg4', '-y', videoPath,
+    ], { windowsHide: true, timeout: 30000 });
+    provider.attachments = [videoPath]; attachmentRequests.length = 0;
+    await provider.start({ task: '/ask 이 영상에서 보이는 화면을 설명해줘.', includeEditor: false });
+    assert.equal(attachmentEvents.findLast(event => event.type === 'runResult').success, true);
+    assert.equal(attachmentRequests.length, 1);
+    const videoUploads = attachmentRequests[0].options.attachments;
+    assert.equal(videoUploads.length, 3);
+    for (const upload of videoUploads) {
+      assert.equal(upload.mimeType, 'image/jpeg');
+      assert.equal(upload.buffer.readUInt16BE(), 0xffd8);
+      assert.equal(upload.buffer.readUInt16BE(upload.buffer.length - 2), 0xffd9);
+    }
+    const videoMetadata = attachmentRequests[0].data.attachments[0];
+    assert.equal(videoMetadata.name, 'recording.mp4'); assert.equal(videoMetadata.kind, 'video');
+    assert.deepEqual(videoMetadata.sampledFrameSeconds, [0.5, 1.5, 2.5]);
+    assert.deepEqual(videoMetadata.uploadedFiles, videoUploads.map(upload => upload.name));
+    assert.match(videoMetadata.note, /Audio.*not analyzed/);
+    assert.equal(videoUploads.some(upload => upload.name.endsWith('.mp4')), false);
+  } finally {
+    provider.attachments = attachmentSelection; provider.browser = attachmentBrowser; provider.post = attachmentPost;
+    for (const name of attachmentBytes.keys()) await fs.unlink(path.join(attachmentDirectory, name));
+    await fs.rmdir(attachmentDirectory);
+    for (const name of await fs.readdir(outsideAttachments)) await fs.unlink(path.join(outsideAttachments, name));
+    await fs.rmdir(outsideAttachments);
+  }
   const { chromium } = require(path.join(extension.extensionPath, 'node_modules', 'playwright-core'));
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
@@ -584,6 +687,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
   const report = { ok: true, checks: ['extension activation', 'offline browser launch/profile diagnostics without relaunch', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'nested/empty-folder deletion, byte restoration, dirty/changed/recreated guards and new-file resource-event race', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  report.checks.push('native image/PDF/Word/Excel bytes and MIME, external file selection, upload-once tool rounds, editor isolation and real video frame decoding');
   report.checks.push('native editor selection and diagnostic quickfix review', 'native lm.tools/invokeTool MCP lookup, argument approval and separate file diff review');
   report.checks.push('opt-in model provider native registration, discovery and typed tool call/result round-trip');
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));

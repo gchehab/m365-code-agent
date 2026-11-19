@@ -1,4 +1,4 @@
-M365 Code Agent 0.15.0 - Installation and use
+M365 Code Agent 0.16.0 - Installation and use
 ==========================================
 
 English is the default release language. For Korean, see INSTALL.ko.txt and
@@ -20,7 +20,7 @@ outside this release's scope.
 Install and use the existing M365 Agent chat
 ------------------------------------------
 1. Open VS Code Extensions, choose ... > Install from VSIX..., and select
-   m365-code-agent-0.15.0.vsix. Reload VS Code if prompted.
+   m365-code-agent-0.16.0.vsix. Reload VS Code if prompted.
    Marketplace: https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent
 2. Open the local project you want to work on.
 3. Open M365 Agent in the secondary sidebar. If an older layout remains, run
@@ -36,6 +36,31 @@ Install and use the existing M365 Agent chat
 
 Example: Fix src/average.js so an empty array returns null, and add a test.
 Example: Remove src/legacy.js and update its imports.
+
+Images, PDF, Word, Excel and videos (M365 Agent sidebar)
+------------------------------------------------------
+Choose "이미지·문서·동영상" to select local files, including files outside the
+project, and ask for an analysis. The existing "+ 파일" workspace picker also
+recognizes supported document/media extensions. Images and PDF/Word/Excel files
+are uploaded through the signed-in Copilot website; ordinary workspace text
+uses the existing text-context path. An upload failure stops the request.
+
+Videos are decoded locally by bundled FFmpeg into three evenly sampled JPEG
+frames with timestamps. Only those images are uploaded, not the original video.
+This provides sampled visual analysis, without audio transcription or coverage
+of every frame or events between samples. The model receives this limitation.
+
+Select at most five files and keep the resulting native uploads within five
+files (a video uses three). Defaults: 64MB per selected file, 100MB total;
+settings: m365Agent.attachmentMaxFileSizeMB / attachmentMaxTotalSizeMB.
+Native uploads have a separate channel from the 120,000-character prompt budget.
+Smaller account/service limits and organizational upload permissions apply.
+Files enter Microsoft's service and follow its retention/storage policies.
+Upload readiness timeout: m365Agent.attachmentTimeoutSeconds (120 seconds).
+For changed tenant UI, attachmentInputSelector / attachmentButtonSelector /
+attachmentReadySelector / attachmentErrorSelector provide CSS overrides.
+This feature is separate from the experimental VS Code model provider, which
+still rejects image/binary API inputs. See README for formats and limitations.
 
 The dedicated profile does not import your normal Edge profile/passwords. Login
 expiry, MFA and CAPTCHA need direct user action. A first request can wait for
@@ -76,8 +101,8 @@ Important experimental limits:
   or continuing a provider Chat created before this update. See README for details.
 - Web history is NOT disabled/deleted. Code, context and tool-result JSON may
   remain in each conversation under organizational retention/audit policies.
-- Default provider budget is 60,000 characters, maximum 120,000. It is separate
-  from the Webview's default 12,000 characters. Actual web input limits prevail.
+- Default provider budget is 120,000 characters, maximum 120,000. It is separate
+  from the Webview's default 120,000 characters. Actual web input limits prevail.
 - One measured first request required about 46K total characters. A smaller web
   input can reject even the compact Agent. Full default Agent/MCP tool sets can
   also fail the host's context preflight before reaching the provider.

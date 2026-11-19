@@ -1,0 +1,21 @@
+M365 Code Agent third-party notices
+
+Video frame extraction uses the unmodified FFmpeg executable distributed by
+ffmpeg-static. It runs as a separate local process. Original videos remain
+local; only extracted images are uploaded when the user submits the request.
+
+ffmpeg-static 5.3.0: GPL-3.0-or-later
+Project and source: https://github.com/eugeneware/ffmpeg-static
+License: node_modules/ffmpeg-static/LICENSE
+
+Windows FFmpeg build supplied by ffmpeg-static:
+FFmpeg 6.1.1-essentials_build-www.gyan.dev (GPL v3)
+Build information: node_modules/ffmpeg-static/ffmpeg.exe.README
+License: node_modules/ffmpeg-static/ffmpeg.exe.LICENSE
+Corresponding upstream source identified by the distributor:
+https://github.com/FFmpeg/FFmpeg/commit/e38092ef93
+Distributor: https://www.gyan.dev/ffmpeg/builds/
+
+These third-party components retain their own licenses. The license for this
+extension's source is in LICENSE. See the installed dependency directories for
+the notices and licenses of other dependencies.

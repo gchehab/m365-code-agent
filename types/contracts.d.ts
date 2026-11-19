@@ -131,11 +131,19 @@ export interface HostEvent {
   [key: string]: unknown;
 }
 export interface AgentOptions {
+  attachments?: UploadAttachment[];
+  attachmentContext?: object[];
   mcp?: McpSession;
   store: import('../src/workspace').WorkspaceStore;
   transport: {
     promptCharacterLimit?: number;
-    request(prompt: string, id: string, status: (text: string) => void): Promise<AgentReply>;
+    request(
+      prompt: string,
+      id: string,
+      status: (text: string) => void,
+      protocol?: undefined,
+      options?: { attachments: UploadAttachment[] },
+    ): Promise<AgentReply>;
     stop(): Promise<void>;
   };
   approveAndApply?: (changes: PreparedChange[], summary: string) => Promise<boolean>;
@@ -149,6 +157,11 @@ export interface AgentOptions {
   maxRounds?: number;
   maxPromptCharacters?: number;
   initialPaths?: string[];
+}
+export interface UploadAttachment {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
 }
 export interface McpSession {
   list(maxCharacters: number, offset?: number): ToolResult;

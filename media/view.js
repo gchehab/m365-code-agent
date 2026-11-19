@@ -88,6 +88,7 @@ function busy(value, policy) {
     'history',
     'more',
     'attach',
+    'attachLocal',
     'model',
     'refreshModels',
     'syncWeb',
@@ -229,8 +230,8 @@ function attachments(files) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'chip';
-    chip.textContent = `${path} ×`;
-    chip.title = '첨부 해제';
+    chip.textContent = `${path.split(/[\\/]/).at(-1)} ×`;
+    chip.title = `${path} · 클릭하여 첨부 해제`;
     chip.addEventListener('click', () => api.postMessage({ type: 'removeAttachment', path }));
     el('attachments').append(chip);
   }
@@ -287,6 +288,7 @@ for (const id of [
   'connect',
   'newChat',
   'attach',
+  'attachLocal',
   'diagnostics',
   'stop',
   'apply',

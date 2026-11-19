@@ -23,6 +23,7 @@ const { connectionError, environmentDiagnostics } = require('./connection');
 const { EditorActions } = require('./editor-actions');
 const { McpBridge } = require('./mcp');
 const { registerModelProvider } = require('./model-provider');
+const { prepareAttachments, attachmentKind, attachmentExtensions } = require('./attachments');
 
 class AgentView {
   constructor(context) {
@@ -212,6 +213,12 @@ class AgentView {
           timeoutSeconds: config.get('responseTimeoutSeconds'),
           loginTimeoutSeconds: config.get('loginTimeoutSeconds', 600),
           modelButtonSelector: config.get('modelButtonSelector'),
+          attachmentInputSelector: config.get('attachmentInputSelector'),
+          attachmentScopeSelector: config.get('attachmentScopeSelector'),
+          attachmentButtonSelector: config.get('attachmentButtonSelector'),
+          attachmentReadySelector: config.get('attachmentReadySelector'),
+          attachmentErrorSelector: config.get('attachmentErrorSelector'),
+          attachmentTimeoutMs: config.get('attachmentTimeoutSeconds', 120) * 1000,
           onConversation: (info) => {
             if (info.restorable) {
               this.webUrl = info.url;
@@ -297,17 +304,60 @@ class AgentView {
     return this.models.chooseModel(id);
   }
   async attachFiles() {
-    if (this.starting || this.agent?.running) return;
+    if (this.starting || this.agent?.running || this.sessionSwitching) return;
     const folder = await this.rootFolder();
+    const sessionId = this.sessionId;
     const store = await new WorkspaceStore(folder.uri.fsPath).initialize();
     const listing = await store.listFiles(1000);
     const picks = await vscode.window.showQuickPick(
       listing.files.map((label) => ({ label, picked: this.attachments.includes(label) })),
       { canPickMany: true, placeHolder: '첨부할 파일 선택 (최대 5개)' },
     );
-    if (!picks) return;
+    if (
+      !picks ||
+      this.sessionId !== sessionId ||
+      this.starting ||
+      this.agent?.running ||
+      this.sessionSwitching
+    )
+      return;
     if (picks.length > 5) throw new Error('파일은 최대 5개까지 첨부할 수 있습니다.');
-    this.attachments = picks.map((pick) => pick.label);
+    const external = this.attachments.filter((file) => path.isAbsolute(file));
+    if (picks.length + external.length > 5)
+      throw new Error('이미지·문서·동영상을 포함해 파일은 최대 5개까지 첨부할 수 있습니다.');
+    this.attachments = [...external, ...picks.map((pick) => pick.label)];
+    this.view?.webview.postMessage({ type: 'attachments', files: this.attachments });
+  }
+  async attachLocalFiles() {
+    if (this.starting || this.agent?.running || this.sessionSwitching) return;
+    const folder = await this.rootFolder();
+    const sessionId = this.sessionId;
+    const files = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      openLabel: '분석할 파일 첨부',
+      title: '이미지·문서·동영상 첨부 (전송 시 M365에 업로드)',
+      filters: { '이미지·문서·동영상': Object.values(attachmentExtensions).flat() },
+    });
+    if (
+      !files ||
+      this.sessionId !== sessionId ||
+      this.starting ||
+      this.agent?.running ||
+      this.sessionSwitching
+    )
+      return;
+    if (files.some((file) => file.scheme !== 'file')) throw new Error('이 PC의 로컬 파일을 선택하세요.');
+    const selectedByPath = new Map();
+    for (const file of [...this.attachments, ...files.map((file) => file.fsPath)]) {
+      const target = path.resolve(folder.uri.fsPath, file);
+      const key = process.platform === 'win32' ? target.toLowerCase() : target;
+      if (!selectedByPath.has(key)) selectedByPath.set(key, file);
+    }
+    const selected = [...selectedByPath.values()];
+    if (selected.length > 5) throw new Error('파일은 최대 5개까지 첨부할 수 있습니다.');
+    this.attachments = selected;
     this.view?.webview.postMessage({ type: 'attachments', files: this.attachments });
   }
   async diagnostics() {
@@ -420,6 +470,7 @@ class AgentView {
       this.workspaceInfo = { name: folder.name, path: store.root };
       this.post({ type: 'workspace', ...this.workspaceInfo });
       const contextFiles = [];
+      const uploadPaths = [];
       if (message.editorTarget)
         contextFiles.push(await this.editorActions.context(message.editorTarget, store));
       const editor = vscode.window.activeTextEditor;
@@ -452,6 +503,11 @@ class AgentView {
         }
       }
       for (const relative of message.editorTarget ? [] : this.attachments) {
+        if (attachmentKind(relative)) {
+          const target = path.isAbsolute(relative) ? relative : (await store.resolve(relative)).target;
+          uploadPaths.push(target);
+          continue;
+        }
         if (contextFiles.some((file) => file.path === relative && !file.selectionOnly)) continue;
         const file = await store.readFile(relative);
         if (file.content.length > 10000) {
@@ -462,6 +518,12 @@ class AgentView {
       }
       if (JSON.stringify(contextFiles).length > 24000)
         throw new Error('첨부 문맥이 큽니다. 첨부 파일 수를 줄이세요.');
+      const prepared = await prepareAttachments(uploadPaths, {
+        maxFileBytes: this.config().get('attachmentMaxFileSizeMB', 64) * 1024 * 1024,
+        maxTotalBytes: this.config().get('attachmentMaxTotalSizeMB', 100) * 1024 * 1024,
+        cancelled: () => this.stopRequested,
+        onStatus: (text) => this.post({ type: 'status', text }),
+      });
       const { task, mode, intent } = resolveTask(message.task);
       const autoApprove = message.autoApprove === true;
       const unlimitedRounds = message.unlimitedRounds === true;
@@ -502,6 +564,8 @@ class AgentView {
         maxRounds: this.config().get('maxRounds'),
         maxPromptCharacters: this.config().get('maxPromptCharacters'),
         initialPaths: message.editorTarget ? [contextFiles[0].path] : undefined,
+        attachments: prepared.uploads,
+        attachmentContext: prepared.context,
         runCommand: (command) => this.runCommand(command, folder.uri.fsPath, autoApprove),
         approveAndApply: (changes, summary) =>
           this.stageAndApply(store, changes, summary, Boolean(message.review), autoApprove),
@@ -560,6 +624,7 @@ class AgentView {
     if (message.type === 'deleteSession') return this.conversations.manageSession('delete', message.id);
     if (message.type === 'deleteAllSessions') return this.conversations.manageSession('deleteAll');
     if (message.type === 'attach') return this.attachFiles();
+    if (message.type === 'attachLocal') return this.attachLocalFiles();
     if (message.type === 'removeAttachment' && !this.starting) {
       this.attachments = this.attachments.filter((file) => file !== message.path);
       this.view.webview.postMessage({ type: 'attachments', files: this.attachments });

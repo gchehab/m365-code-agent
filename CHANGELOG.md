@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.0
+
+- Recognize native Bebop attachment cards whose filenames exist only in accessibility labels, and distinguish informational OneDrive upload notices from actual failures. Wait for an empty loading composer to settle while preserving existing-draft protection.
+- Validate image, PDF, Word, Excel and sampled video analysis through the installed VSIX sidebar/file chooser/Run flow in VS Code 1.147.0 with a signed-in company Copilot account and synthetic fixtures.
+
+- Add explicit local image, PDF, Word and Excel selection and native Copilot uploads to the M365 Agent sidebar, with bounded file sizes, upload readiness/error checks and no silent text-only submission on upload failure. Keep ordinary workspace text attachments and experimental model-provider binary-input restrictions.
+- Analyze videos through three locally sampled JPEG frames with timestamps using bundled FFmpeg. State partial visual coverage and no audio transcription in both the request and guides; never upload the original video. Cap selection and resulting uploads at five files.
+
+- Raise the default per-request prompt budget to 120,000 characters for both the Webview agent and experimental VS Code model provider. Preserve explicit user settings and smaller web input limits.
+
 ## 0.15.0
 
 - Reuse one mapped web conversation per VS Code Chat across follow-up questions and tool results. Restore its validated URL on Chat switches and after browser/extension restart; never create a replacement when restoration or identity checks fail.

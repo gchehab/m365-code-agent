@@ -40,6 +40,8 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   });
   await page.goto('https://agent.test/');
   await page.waitForFunction(() => window.sent.some(message => message.type === 'ready'));
+  await page.getByRole('button', { name: '이미지·문서·동영상', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.sent.filter(message => message.type === 'attachLocal').length), 1);
   assert.equal(await page.locator('#review').isChecked(), true);
   const input = page.locator('#task');
   await input.fill('첫 줄'); await input.press('Shift+Enter');
@@ -49,6 +51,7 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await input.press('Enter');
   assert.equal((await page.evaluate(() => window.sent.filter(message => message.type === 'run'))).length, 1);
   assert.equal(await page.locator('#stop').isVisible(), true);
+  assert.equal(await page.locator('#attachLocal').isDisabled(), true);
   const host = data => page.evaluate(data => window.dispatchEvent(new MessageEvent('message', { data })), data);
   assert.equal(await page.locator('#mode').count(), 0);
   await host({ type: 'idle' });

@@ -139,7 +139,7 @@ test('bounded tool batches retain useful source and explicitly defer excess call
   const { root, store } = await fixture(t);
   await fs.writeFile(path.join(root, 'src/main.js'), 'x'.repeat(3000));
   let requests = 0, commands = 0;
-  const agent = new CodingAgent({ store, emit: () => {}, runCommand: async () => { commands++; }, transport: { async request(prompt) {
+  const agent = new CodingAgent({ store, maxPromptCharacters: 12000, emit: () => {}, runCommand: async () => { commands++; }, transport: { async request(prompt) {
     if (++requests === 1) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/main.js' }, { name: 'read_file', path: 'src/main.js' }, { name: 'run_command', command: 'unexpected-command' }] };
     const data = JSON.parse(prompt.split('DATA: ')[1]);
     const results = data.history.at(-1).observations;

@@ -117,6 +117,7 @@ function renderWebview({ nonce, cspSource, resource }) {
 <div class="composer-tools">
 <div class="toolbar">
 <button id="attach" type="button" title="프로젝트 파일 첨부">＋ 파일</button>
+<button id="attachLocal" type="button" title="전송 시 원본 파일을 M365에 업로드합니다. 동영상은 3개 시점의 화면을 분석하며 음성은 제외합니다.">이미지·문서·동영상</button>
 <button id="connect" type="button" title="Copilot 연결 / 로그인">연결</button>
 </div>
 <div>

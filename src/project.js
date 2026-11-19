@@ -1,7 +1,7 @@
 'use strict';
 const { rankFiles } = require('./search');
 
-async function inspectProject(store, task, maxCharacters = 12000, emit, cancelled = () => false, paths) {
+async function inspectProject(store, task, maxCharacters = 120000, emit, cancelled = () => false, paths) {
   const id = 'project-scan';
   emit({ type: 'tool', id, label: '프로젝트 파일 탐색', state: 'running' });
   const listing = store.discoverFiles

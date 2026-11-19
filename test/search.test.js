@@ -36,7 +36,7 @@ test('retrieval reaches code beyond the old 1000-file inventory and reads the ma
   assert.equal(literal.matches[0].path, target);
   assert.equal(literal.searchedFiles, 1252);
   const events = [];
-  const agent = new CodingAgent({ store, emit: event => events.push(event), transport: {
+  const agent = new CodingAgent({ store, maxPromptCharacters: 12000, emit: event => events.push(event), transport: {
     async request(prompt) {
       const data = JSON.parse(prompt.split('DATA: ')[1]);
       assert.equal(data.files.files[0], target);

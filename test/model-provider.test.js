@@ -375,8 +375,8 @@ test('token reporting uses a UTF-8 token estimate and a separate conservative to
   assert.notEqual(info.maxInputTokens, f.settings['experimental.modelProvider.maxPromptCharacters']);
   delete f.settings['experimental.modelProvider.maxPromptCharacters'];
   const [defaults] = await f.provider.provideLanguageModelChatInformation({}, cancellation());
-  assert.equal(f.provider.promptLimit(), 60000);
-  assert.equal(defaults.maxInputTokens, 19333);
+  assert.equal(f.provider.promptLimit(), 120000);
+  assert.equal(defaults.maxInputTokens, 39333);
 });
 
 test('a confirmed unsent maxlength rejection rebudgets old exchanges once and keeps the warm browser', async t => {

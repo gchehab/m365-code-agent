@@ -70,7 +70,7 @@ class ExperimentalModelProvider {
   }
 
   promptLimit() {
-    return this.config().get('experimental.modelProvider.maxPromptCharacters', 60000);
+    return this.config().get('experimental.modelProvider.maxPromptCharacters', 120000);
   }
 
   async provideLanguageModelChatResponse(model, messages, options, progress, token) {
