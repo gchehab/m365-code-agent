@@ -443,6 +443,7 @@ class CopilotBrowser {
   }
   async newChat() {
     await this.connect();
+    await this.protectConversationDraft();
     const name = /^(새 채팅|새 대화|New chat|New conversation)$/i;
     for (const frame of this.page.frames()) {
       for (const role of ['button', 'link']) {
@@ -455,8 +456,34 @@ class CopilotBrowser {
       }
     }
     throw new Error(
-      '새 대화 버튼을 찾지 못했습니다. 전용 브라우저에서 새 채팅을 선택하세요. 기존 대화에서 작업을 계속하는 것도 가능합니다.',
+      '새 대화 버튼을 찾지 못해 요청을 보내지 않았습니다. 전용 브라우저의 새 채팅 버튼을 확인하세요.',
     );
+  }
+  async protectConversationDraft() {
+    if (await this.generationActive())
+      throw new Error('웹에서 응답을 생성 중입니다. 완료 후 대화를 전환하세요.');
+    let composer;
+    try {
+      composer = await this.getComposer();
+    } catch {
+      return;
+    }
+    if ((await readComposer(composer.locator)).text.trim())
+      throw new Error(
+        '웹 입력창에 작성 중인 내용이 있어 대화를 전환하지 않았습니다. 초안을 먼저 정리하세요.',
+      );
+  }
+  async resumeConversation(value) {
+    const target = conversationUrl(validateCopilotUrl(value));
+    if (!target.restorable)
+      throw new Error('복원할 수 있는 웹 대화 주소가 아닙니다. 새 웹 대화를 만들지 않았습니다.');
+    await this.connect();
+    if (this.conversationInfo().url === target.url) return;
+    await this.protectConversationDraft();
+    await this.page.goto(target.url, { waitUntil: 'domcontentloaded' });
+    await this.waitForComposer();
+    if (this.conversationInfo().url !== target.url)
+      throw new Error('원래 웹 대화로 복원되지 않아 요청을 중단했습니다. 새 웹 대화를 만들지 않았습니다.');
   }
   async request(prompt, id, onStatus = () => {}, protocol = { parseReply, mergeReplies, replyIdentity }) {
     const { parseReply, mergeReplies, replyIdentity } = protocol;

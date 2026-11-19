@@ -168,7 +168,10 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   // Exercise the host's actual conversation mapping without calling a model or file tool.
   view.webview.postMessage = noop;
   let snapshot = { url: 'https://m365.cloud.microsoft/chat?threadId=one', restorable: true, messages: [{ type: 'message', role: 'user', text: '첫 대화', webId: 'one:1' }] };
-  provider.browser = { page: { isClosed: () => false }, readConversation: async () => snapshot };
+  provider.browser = { page: { isClosed: () => false }, async newChat() {}, async waitForComposer() {}, readConversation: async () => snapshot };
+  await provider.syncWeb();
+  assert.equal(provider.webUrl, undefined, 'a pending new local chat must not adopt the previously opened web chat');
+  await provider.conversations.prepareWeb();
   await provider.syncWeb();
   const firstId = provider.sessionId;
   snapshot = { url: 'https://m365.cloud.microsoft/chat?threadId=two', restorable: true, messages: [{ type: 'message', role: 'user', text: '다른 대화', webId: 'two:1' }] };

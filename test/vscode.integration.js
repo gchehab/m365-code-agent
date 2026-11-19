@@ -9,6 +9,7 @@ async function run() {
   const extension = vscode.extensions.getExtension('jhoon-dev.m365-code-agent');
   assert.ok(extension, 'extension is loaded');
   const { provider, modelProvider } = await extension.activate();
+  assert.equal(provider.newWebChat, !provider.webUrl, 'an unlinked initial VS Code chat must start its own web conversation');
   assert.ok(extension.packageJSON.contributes.viewsContainers.secondarySidebar.some(container => container.id === 'm365Agent'));
   assert.equal(extension.packageJSON.contributes.viewsContainers.activitybar, undefined);
   assert.ok((await vscode.commands.getCommands(true)).includes('workbench.view.extension.m365Agent.resetViewContainerLocation'));
@@ -537,7 +538,7 @@ async function run() {
     // Exercise the complete provider -> browser -> rendered widget -> provider
     // path inside the extension host, without a real company account.
     const context = await browser.newContext();
-    await context.route('https://m365.cloud.microsoft/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<textarea id="userInput"></textarea><button id="send">보내기</button><button disabled>Stop generating</button><main><section><div id="answer"></div></section></main><script>
+    await context.route('https://m365.cloud.microsoft/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<button id="new" onclick="window.newChatCount=(window.newChatCount||0)+1">New chat</button><textarea id="userInput"></textarea><button id="send">보내기</button><button disabled>Stop generating</button><main><section><div id="answer"></div></section></main><script>
 document.querySelector('#send').onclick=()=>{const input=document.querySelector('textarea');const prompt=input.value;const id=prompt.match(/Current requestId: ([^\\s]+)/)[1];const data=JSON.parse(prompt.slice(prompt.indexOf(' DATA: ')+7));input.value='';let reply={requestId:id,kind:'done',message:'실제 VS Code 자동 응답 수집 확인'};
 if(data.task.includes('샘플 코드')){window.multiRound=(window.multiRound||0)+1;if(window.multiRound===1){const answer=document.querySelector('#answer');answer.replaceChildren();for(const file of [{path:'samples/add.js',action:'create',baseHash:null,content:'exports.add = (a, b) => a + b;\\n'},{path:'samples/add.test.js',action:'create',baseHash:null,content:'const assert = require("node:assert/strict"); const {add} = require("./add"); assert.equal(add(1,2),3);\\n'}]){const pre=document.createElement('pre');pre.textContent=JSON.stringify({requestId:id,kind:'changes',files:[file]});answer.append(pre);}const done=document.createElement('pre');done.textContent=JSON.stringify({requestId:id,kind:'done',message:'두 파일의 코드를 준비했습니다.'});answer.append(done);return;}window.multiAppliedSeen=data.history.some(x=>x.kind==='change_result'&&x.applied&&x.files.includes('samples/add.js'));reply={requestId:id,kind:'done',message:'다중 JSON 파일 저장 확인'};}
 if(data.task.includes('src/target.js')){window.editRound=(window.editRound||0)+1;const observations=data.history.filter(x=>x.kind==='tool_results').flatMap(x=>x.observations);const file=[...observations].reverse().find(x=>x.result&&x.result.path==='src/target.js');
@@ -553,6 +554,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     transport.context = context; transport.page = chat; provider.browser = transport;
     await provider.start({ task: '응답 수집을 확인해줘.', mode: 'ask', includeEditor: false });
     assert.equal(transport.lastResponse.stage, 'complete');
+    assert.equal(await chat.evaluate(() => window.newChatCount), 1, 'unlinked initial Webview chat creates its web conversation once');
     assert.equal(provider.browserPanel.panel.viewType, 'm365Agent.browser');
     for (let tries = 0; tries < 60 && (!provider.browserPanel.screen?.sequence || provider.browserPanel.screen.inFlight); tries++) await new Promise(resolve => setTimeout(resolve, 50));
     assert.ok(provider.browserPanel.screen.sequence > 0, 'actual editor browser receives live frames');
@@ -566,6 +568,7 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.equal(await fs.readFile(path.join(root, 'src', 'target.js'), 'utf8'), target.replace('exports.value = 1;', 'exports.value = 2;'));
     await provider.start({ task: '샘플 코드 작성해줘. 함수와 테스트를 각각 파일로 만들어줘.', includeEditor: false, review: false });
     assert.equal(await chat.evaluate(() => window.multiRound), 2);
+    assert.equal(await chat.evaluate(() => window.newChatCount), 1, 'follow-ups and file-tool rounds stay in the same Webview conversation');
     assert.equal(await chat.evaluate(() => window.multiAppliedSeen), true);
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
     assert.match(await fs.readFile(path.join(root, 'samples/add.test.js'), 'utf8'), /assert.equal/);

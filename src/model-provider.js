@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { CopilotBrowser } = require('./browser');
 const protocol = require('./model-protocol');
+const { ModelConversations, cleanMessages } = require('./model-conversations');
 
 class ExperimentalModelProvider {
   constructor(context, vscode, createBrowser = (options) => new CopilotBrowser(options)) {
@@ -20,6 +21,8 @@ class ExperimentalModelProvider {
     this.closing = Promise.resolve();
     this.interruptActive = null;
     this.output = vscode.window?.createOutputChannel?.('M365 Web Model');
+    this.conversations = new ModelConversations(context.workspaceState);
+    this.activeConversationId = null;
     this.config = () => vscode.workspace.getConfiguration('m365Agent');
   }
 
@@ -60,7 +63,9 @@ class ExperimentalModelProvider {
   async provideTokenCount(_model, value, token) {
     this.assertAvailable(token);
     return protocol.estimateTokens(
-      typeof value === 'string' ? value : JSON.stringify(protocol.convertMessages([value], this.vscode)),
+      typeof value === 'string'
+        ? value
+        : JSON.stringify(cleanMessages(protocol.convertMessages([value], this.vscode))),
     );
   }
 
@@ -93,7 +98,8 @@ class ExperimentalModelProvider {
     const check = () => this.assertAvailable(token, generation);
     check();
     if (model.id !== 'web-current-experimental') throw new Error('알 수 없는 실험용 모델입니다.');
-    const converted = protocol.convertMessages(messages, this.vscode);
+    const originalMessages = protocol.convertMessages(messages, this.vscode);
+    const converted = cleanMessages(originalMessages);
     const tools = (options.tools || []).map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -109,86 +115,146 @@ class ExperimentalModelProvider {
       limit: this.promptLimit(),
     });
     let prepared = protocol.prepareModelPrompt(id, converted, { tools, required }, this.promptLimit());
-    await this.enqueue(async () => {
-      check();
-      const browser = await this.ensureBrowser();
-      browser.cancelled = false;
-      let stopping = Promise.resolve();
-      let succeeded = false;
-      const interrupt = () => {
-        stopping = stopping.then(() => browser.stop()).catch(() => {});
-      };
-      this.interruptActive = interrupt;
-      const cancellation = token.onCancellationRequested(interrupt);
-      try {
+    const binding = this.conversations.resolve(
+      originalMessages,
+      options,
+      this.config().get('copilotUrl', 'https://m365.cloud.microsoft/chat'),
+    );
+    const conversation = binding.record;
+    this.conversations.retain(conversation);
+    try {
+      await this.enqueue(async () => {
         check();
-        this.trace({ event: 'browser-connect' });
-        await browser.connect();
-        check();
-        await browser.waitForComposer();
-        check();
-        // A fresh web chat for EVERY turn prevents other VS Code chats/old tools leaking into this one.
-        // This turn's prepared history is explicitly supplied again. Failure aborts before submission.
-        await browser.newChat();
-        this.trace({ event: 'new-chat' });
-        check();
-        prepared = protocol.prepareModelPrompt(
-          id,
-          converted,
-          { tools, required },
-          Math.min(this.promptLimit(), browser.promptCharacterLimit ?? Infinity),
-        );
-        let reply;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            reply = await browser.request(prepared.prompt, id, () => {}, protocol);
+        this.conversations.check(binding);
+        const browser = await this.ensureBrowser();
+        browser.cancelled = false;
+        let stopping = Promise.resolve();
+        let succeeded = false;
+        const interrupt = () => {
+          stopping = stopping.then(() => browser.stop()).catch(() => {});
+        };
+        this.interruptActive = interrupt;
+        const cancellation = token.onCancellationRequested(interrupt);
+        try {
+          check();
+          this.trace({ event: 'browser-connect' });
+          await browser.connect();
+          check();
+          await browser.waitForComposer();
+          check();
+          if (conversation.url) {
+            await browser.resumeConversation(conversation.url);
             this.trace({
-              event: 'response',
-              textCharacters: reply.text.length,
-              toolCalls: reply.toolCalls.length,
+              event: 'conversation',
+              action: this.activeConversationId === conversation.id ? 'continued' : 'restored',
             });
-            break;
-          } catch (error) {
-            if (
-              attempt ||
-              error.code !== 'PROMPT_LIMIT' ||
-              error.notSubmitted !== true ||
-              !Number.isFinite(error.maxCharacters) ||
-              error.maxCharacters <= 0 ||
-              error.maxCharacters >= prepared.prompt.length ||
-              ['clicked', 'unconfirmed'].includes(browser.lastSend?.stage)
-            )
-              throw error;
+          } else if (!conversation.started) {
+            await browser.newChat();
+            conversation.started = true;
+            this.trace({ event: 'new-chat' });
+          } else if (this.activeConversationId !== conversation.id) {
+            throw Object.assign(
+              new Error(
+                '이 대화의 복원 가능한 웹 주소가 없어 재연결하지 않았습니다. 새 웹 대화를 자동으로 만들지 않았습니다.',
+              ),
+              { code: 'MODEL_CONVERSATION_UNAVAILABLE' },
+            );
+          }
+          this.activeConversationId = conversation.id;
+          if (conversation.url) this.conversations.capture(conversation, browser.conversationInfo());
+          await this.conversations.save();
+          check();
+          prepared = protocol.prepareModelPrompt(
+            id,
+            converted,
+            { tools, required },
+            Math.min(this.promptLimit(), browser.promptCharacterLimit ?? Infinity),
+          );
+          let reply;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              reply = await browser.request(prepared.prompt, id, () => {}, protocol);
+              this.trace({
+                event: 'response',
+                textCharacters: reply.text.length,
+                toolCalls: reply.toolCalls.length,
+              });
+              break;
+            } catch (error) {
+              if (
+                attempt ||
+                error.code !== 'PROMPT_LIMIT' ||
+                error.notSubmitted !== true ||
+                !Number.isFinite(error.maxCharacters) ||
+                error.maxCharacters <= 0 ||
+                error.maxCharacters >= prepared.prompt.length ||
+                ['clicked', 'unconfirmed'].includes(browser.lastSend?.stage)
+              )
+                throw error;
+              check();
+              // Rebuild only after a confirmed pre-submit rejection. Never retry an uncertain submission.
+              prepared = protocol.prepareModelPrompt(id, converted, { tools, required }, error.maxCharacters);
+            }
+          }
+          check();
+          protocol.validateCalls(reply, tools, required, converted);
+          this.conversations.capture(conversation, browser.conversationInfo());
+          const notice =
+            prepared.omittedMessages || prepared.referencedTextParts
+              ? `> 문맥 축소: 오래된 메시지 ${prepared.omittedMessages}개 생략, 반복 사용자 텍스트 ${prepared.referencedTextParts || 0}개 참조 처리. System 지시·사용자 요청·최근 도구 교환·도구 정의는 유지했습니다.\n\n`
+              : '';
+          const previousTurns = [...conversation.turns],
+            previousCalls = [...conversation.calls];
+          const previousFailedInput = conversation.failedInput;
+          const response = this.conversations.finish(conversation, notice + reply.text, reply.toolCalls);
+          try {
+            await this.conversations.save();
             check();
-            // Rebuild only after a confirmed pre-submit rejection. Never retry an uncertain submission.
-            prepared = protocol.prepareModelPrompt(id, converted, { tools, required }, error.maxCharacters);
+          } catch (error) {
+            conversation.turns = previousTurns;
+            conversation.calls = previousCalls;
+            if (previousFailedInput) conversation.failedInput = previousFailedInput;
+            await this.conversations.save();
+            throw error;
+          }
+          // DOM responses become available only once the complete JSON is validated.
+          check();
+          progress.report(new this.vscode.LanguageModelTextPart(response.text));
+          for (const call of response.calls) {
+            check();
+            progress.report(new this.vscode.LanguageModelToolCallPart(call.id, call.name, call.input));
+          }
+          succeeded = true;
+        } finally {
+          cancellation.dispose();
+          this.interruptActive = null;
+          await stopping;
+          try {
+            if (!succeeded && conversation.started) {
+              if (binding.fingerprint && !conversation.turns.length)
+                conversation.failedInput = binding.fingerprint;
+              try {
+                this.conversations.capture(conversation, browser.conversationInfo());
+              } catch {
+                /* Preserve the last confirmed URL. */
+              }
+              await this.conversations.save();
+            }
+          } finally {
+            // Persistence failures must also retire the browser.
+            if (
+              !succeeded ||
+              token.isCancellationRequested ||
+              this.disposed ||
+              generation !== this.generation
+            )
+              await this.retireBrowser(browser);
           }
         }
-        check();
-        protocol.validateCalls(reply, tools, required, converted);
-        // DOM responses become available only once the complete JSON is validated.
-        if (prepared.omittedMessages || prepared.referencedTextParts)
-          progress.report(
-            new this.vscode.LanguageModelTextPart(
-              `> 문맥 축소: 오래된 메시지 ${prepared.omittedMessages}개 생략, 반복 사용자 텍스트 ${prepared.referencedTextParts || 0}개 참조 처리. System 지시·사용자 요청·최근 도구 교환·도구 정의는 유지했습니다.\n\n`,
-            ),
-          );
-        check();
-        if (reply.text) progress.report(new this.vscode.LanguageModelTextPart(reply.text));
-        for (const call of reply.toolCalls) {
-          check();
-          progress.report(new this.vscode.LanguageModelToolCallPart(call.id, call.name, call.input));
-        }
-        succeeded = true;
-      } finally {
-        cancellation.dispose();
-        this.interruptActive = null;
-        await stopping;
-        // Keep successful sessions warm. Retire failures/cancellation so late generation cannot reach the next turn.
-        if (!succeeded || token.isCancellationRequested || this.disposed || generation !== this.generation)
-          await this.retireBrowser(browser);
-      }
-    }, token);
+      }, token);
+    } finally {
+      this.conversations.releaseUnused(conversation);
+    }
   }
 
   enqueue(work, token) {
@@ -222,7 +288,7 @@ class ExperimentalModelProvider {
     await fs.mkdir(profile, { recursive: true });
     this.browser = this.createBrowser({
       profile,
-      url: config.get('copilotUrl'),
+      url: config.get('copilotUrl', 'https://m365.cloud.microsoft/chat'),
       channel: config.get('browserChannel', 'msedge'),
       embedded: false,
       composerSelector: config.get('composerSelector'),
@@ -237,8 +303,27 @@ class ExperimentalModelProvider {
 
   retireBrowser(browser = this.browser) {
     if (!browser || browser !== this.browser) return this.closing;
+    let saving = Promise.resolve();
+    const conversation = this.conversations.records.get(this.activeConversationId);
+    if (conversation?.started) {
+      try {
+        this.conversations.capture(conversation, browser.conversationInfo());
+        saving = this.conversations.save();
+      } catch {
+        // Preserve the last confirmed mapping if the user already closed/navigated the page.
+      }
+    }
     this.browser = null;
-    this.closing = this.closing.catch(() => {}).then(() => browser.close());
+    this.activeConversationId = null;
+    this.closing = this.closing
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await saving;
+        } finally {
+          await browser.close();
+        }
+      });
     return this.closing;
   }
 

@@ -1,4 +1,4 @@
-M365 Code Agent 0.14.1 - Installation and use
+M365 Code Agent 0.15.0 - Installation and use
 ==========================================
 
 English is the default release language. For Korean, see INSTALL.ko.txt and
@@ -20,7 +20,7 @@ outside this release's scope.
 Install and use the existing M365 Agent chat
 ------------------------------------------
 1. Open VS Code Extensions, choose ... > Install from VSIX..., and select
-   m365-code-agent-0.14.1.vsix. Reload VS Code if prompted.
+   m365-code-agent-0.15.0.vsix. Reload VS Code if prompted.
    Marketplace: https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent
 2. Open the local project you want to work on.
 3. Open M365 Agent in the secondary sidebar. If an older layout remains, run
@@ -65,8 +65,15 @@ and its undo DO NOT apply. Host Chat/account/tool/organization requirements appl
 
 Important experimental limits:
 - No token streaming; a complete validated JSON response is returned at once.
-- Successful browser sessions are reused, but each model/tool round trip starts
-  a new WEB conversation and resends its prepared host context.
+- Each VS Code Chat creates one web conversation at its first request. Follow-up
+  questions and tool round trips reuse it; Chat switches restore the mapped URL.
+  Successful browser sessions are reused. Existing web history is not deleted.
+- Native Chat routing uses opaque references in assistant history (hidden in
+  Markdown; visible in raw copies) and unique tool-call IDs because the stable
+  provider API exposes no session ID. URL mappings survive extension reloads.
+  Missing/stale identifiers or failed URL restoration stop the request without
+  creating a replacement. Start a new Chat when switching from another model
+  or continuing a provider Chat created before this update. See README for details.
 - Web history is NOT disabled/deleted. Code, context and tool-result JSON may
   remain in each conversation under organizational retention/audit policies.
 - Default provider budget is 60,000 characters, maximum 120,000. It is separate
@@ -154,7 +161,8 @@ The extension does not bypass company policy, certificates or login controls.
 Full behavior, configuration, measured live-test scope and development commands:
 README.md (English), README.ko.md (Korean). Changes: CHANGELOG.md.
 
-0.14.1 fixes project-analysis JSON shown as raw text in the M365 Agent chat.
+0.15.0 reuses a mapped web conversation for each VS Code Chat across follow-ups
+and tool round trips. 0.14.1's structured-answer display fix is retained.
 Recognized report objects are displayed as readable sections even in saved history;
 stored originals and explicitly requested JSON/code examples are preserved. Copy
 and the wide reader match the displayed answer. Reload the VS Code window after

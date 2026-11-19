@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.0
+
+- Reuse one mapped web conversation per VS Code Chat across follow-up questions and tool results. Restore its validated URL on Chat switches and after browser/extension restart; never create a replacement when restoration or identity checks fail.
+- Route native model-provider Chats using opaque assistant-history references and unique host tool-call IDs because the stable API exposes no session ID. Persist only routing metadata and URLs in workspace state, strip references from model input, and reject mixed/stale/unknown histories. Raw copied Markdown may include the reference. Older pre-mapping provider Chats require a new VS Code Chat.
+- Make an unlinked initial Webview chat prepare its own web conversation and prevent it from importing the browser's previously open conversation. Preserve existing Webview URL mappings and draft protection.
+- Mark the current request snapshot and tool schemas authoritative when continuing a web conversation. Clarify that task output-format requests apply inside the JSON text field, not in place of the transport envelope. Keep web retention/audit disclosures and English-default/Korean-optional guides. Existing web history is not deleted or renamed.
+- Cover text/tool continuity, identical separate Chats, A/B switching, persisted restoration, failed restoration with no fallback, missing/stale routing, storage failures and real Edge draft/navigation behavior.
+
 ## 0.14.1
 
 - Fix project-analysis answers appearing as raw JSON in the M365 Agent Webview when the model serialized an outcome/summary report inside an otherwise valid completion message. Render recognized report sections as readable Markdown, including when reopening saved history.

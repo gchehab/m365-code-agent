@@ -8,7 +8,7 @@ An independent VS Code coding agent that uses your signed-in Microsoft 365 Copil
 
 This project is not affiliated with, endorsed by, or supported by Microsoft. You need an eligible Microsoft 365 Copilot account and permission to use browser automation in your organization. Successful tests with one account and example projects do not establish compatibility with every tenant, login flow or security policy.
 
-Version **0.14.1** fixes structured project-analysis reports appearing as raw JSON in the M365 Agent chat. It includes 0.14.0's optional VS Code model provider, editor actions, lookup-oriented MCP integration and ranked code search alongside the existing chat. See the [changelog](CHANGELOG.md).
+Version **0.15.0** reuses one web conversation per VS Code Chat across follow-ups and tool round trips, and restores its mapped URL when switching Chats. It also keeps the structured-answer display fix, optional model provider and existing Webview. See the [changelog](CHANGELOG.md).
 
 ## Authentication and change protection
 
@@ -20,7 +20,7 @@ Code, conversation context and tool results needed for a task are sent to the si
 
 ## Install and connect
 
-1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent), or use **Extensions → … → Install from VSIX…** with `m365-code-agent-0.14.1.vsix` from a [GitHub release](https://github.com/jhoon-dev/m365-code-agent/releases).
+1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent), or use **Extensions → … → Install from VSIX…** with `m365-code-agent-0.15.0.vsix` from a [GitHub release](https://github.com/jhoon-dev/m365-code-agent/releases).
 2. Open a local project and the **M365 Agent** view in the secondary sidebar. The command `M365 Agent: 오른쪽에서 열기` opens/restores this view.
 3. Click **연결** (Connect) below the input. The **M365 Copilot 브라우저** editor tab displays the actual automated Edge page.
 4. Complete your company login and MFA yourself, then open the Copilot chat page. Use **외부 브라우저로 전환** (Switch to external browser) if native authentication windows are needed.
@@ -50,8 +50,10 @@ The template requests file reading/editing without terminal commands or external
 ### Limits and conversation handling
 
 - Converts text, System/User/Assistant roles, tool schemas, call IDs and results. System instructions are preserved as roles and bridge instructions in JSON; this is not access to the website's native system channel. UTF-8 text/JSON/XML DataParts and documented text-only PromptTsx trees are supported. Images, binary data and opaque/unknown PromptTsx nodes are explicitly rejected.
-- Keeps a separate browser profile and a serial queue of up to eight active/pending requests. Queued cancellation submits nothing. Each request starts a fresh web conversation and resends its prepared host context. **Successful browser sessions are reused.** Failure, cancellation, relevant configuration changes or disposal retire the browser. The provider does not synchronize with the Webview's history.
-- **Web history is not disabled or automatically deleted.** One user task can produce a new web conversation for every tool round trip. Each may retain JSON prompts containing conversation context, code and tool results. Organizational retention/audit policy may apply. Local count-only diagnostics do not prevent this web history.
+- Keeps a separate browser profile and a serial queue of up to eight active/pending requests. Queued cancellation submits nothing. Each VS Code Chat starts one web conversation on its first request. Follow-ups and tool round trips reuse it; switching Chats restores the corresponding web URL. **Successful browser sessions are reused.** Failure, cancellation, relevant configuration changes or disposal retire the browser. The provider does not synchronize with the Webview's history.
+- **Web history is not disabled or automatically deleted.** Each mapped web conversation may retain all round-trip JSON prompts containing conversation context, code and tool results. Organizational retention/audit policy may apply. Local count-only diagnostics do not prevent this web history.
+- The [stable VS Code model-provider API does not expose a Chat/session ID](https://github.com/microsoft/vscode/issues/305853). The experimental bridge therefore retains opaque routing references in assistant history and unique host tool-call IDs, with URL mappings saved in workspace state. These reference definitions are hidden by Markdown rendering, but can appear when copying raw text. They are removed from model input; mapping storage contains no prompt/answer bodies. Callers that manage their own sessions may pass `modelOptions.m365ConversationId`. If history identifiers are missing, stale (for example after branching/regeneration), or the saved web URL cannot be restored, the request stops instead of guessing or creating another web conversation. Start a new VS Code Chat when first switching to this provider from another model; older pre-mapping provider Chats cannot be restored automatically.
+- Webview chats keep their own existing URL mappings; native Copilot Chat and Webview lists are separate. Web titles, local renames/deletions and rendered web JSON are not mirrored. Existing accumulated web history is left intact.
 - No token streaming: validated text and tool calls are returned after the complete JSON response is collected. Web round trips add latency at each Agent step.
 - `m365Agent.experimental.modelProvider.maxPromptCharacters` defaults to **60,000 characters**, maximum 120,000, including bridge instructions, history and schemas. This is separate from the Webview's 12,000-character default. The actual web input limit takes precedence. Only a **confirmed unsubmitted** length rejection can trigger one smaller rebuild; uncertain submissions are never resent.
 - Supports up to eight tool calls per response, without a fixed tool-schema count limit. Calls in one response may run concurrently; the bridge instructs the model to batch only independent actions and request verification reads after edit results in a later response. This does not enforce host execution order.
@@ -67,7 +69,9 @@ The **M365 Web Model** output channel records phases, role/message/tool counts, 
 
 ### Live-account verification
 
-Verified on **November 18–19, 2026, VS Code 1.147.0**, using a compact read/edit Agent, the **Copilot** execution path and an actual M365 web account:
+**Conversation mapping check (November 19, 2026, VS Code 1.147.0):** four successful text requests through the **Local / Ask** path verified A → A follow-up → separate B → reopened A. Both A follow-ups used A's original web URL; B used a different URL, and the synthetic ALPHA/BETA answers stayed separate. The test temporarily used an 80,000-character user limit, then restored it. In this host configuration, the legacy compact Agent still passed 91 tools (about 171K characters); Ask passed 20 tools (about 64K), exceeding the default 60K. Tool selection/Agent migration and host configuration therefore still matter. An initial literal-only answer omitted transport JSON; after clarifying text-field versus envelope formatting, the four requests completed. Restart restoration and tool-round-trip mapping are covered by automated tests with real Edge mock pages and native-host typed calls; this live run did not execute tools.
+
+Historical checks before conversation mapping, on **November 18–19, 2026, VS Code 1.147.0**, used a compact read/edit Agent, the **Copilot** execution path and an actual M365 web account:
 
 - Changed a calculator's subtraction bug to addition and completed read → edit → tool-result-based completion. The first run used a 120,000-character setting. After matching token-budget units, separate tasks also worked at the then-default 48,000-character limit.
 - A first request needed approximately **46K total characters**: about 39K of messages, 5K of tool schemas and bridge overhead. This is a measurement, not a universal minimum. Smaller web inputs can reject even the compact Agent's first request.

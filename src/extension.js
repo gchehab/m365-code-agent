@@ -38,7 +38,8 @@ class AgentView {
     this.sessionId = context.workspaceState.get('activeSession');
     this.events = this.sessions.find((session) => session.id === this.sessionId)?.events || [];
     this.webUrl = this.sessions.find((session) => session.id === this.sessionId)?.webUrl;
-    this.newWebChat = this.sessions.find((session) => session.id === this.sessionId)?.newWebChat || false;
+    this.newWebChat =
+      !this.webUrl || Boolean(this.sessions.find((session) => session.id === this.sessionId)?.newWebChat);
     this.modelChoices = [];
     this.attachments = [];
     this.checkpoints = [];

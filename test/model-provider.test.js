@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { ExperimentalModelProvider, registerModelProvider } = require('../src/model-provider');
 const protocol = require('../src/model-protocol');
+const { cleanText, ModelConversations } = require('../src/model-conversations');
 
 class EventEmitter {
   constructor() { this.listeners = new Set(); this.event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; }; }
@@ -38,12 +39,17 @@ async function fixture(t, respond, enabled = true) {
     workspace: { isTrusted: true, getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback }) },
     lm: { invokeTool() { throw new Error('Provider must never execute tools'); } },
   };
-  const provider = new ExperimentalModelProvider({ globalStorageUri: { fsPath: root } }, vscode, options => {
+  let stored;
+  const state = { get: (_key, fallback) => stored ?? fallback, async update(_key, value) { stored = structuredClone(value); } };
+  const provider = new ExperimentalModelProvider({ globalStorageUri: { fsPath: root }, workspaceState: state }, vscode, options => {
     log.push({ type: 'create', options });
+    let url = 'https://m365.cloud.microsoft/chat';
     return {
       async connect() { log.push({ type: 'connect' }); },
       async waitForComposer() {},
-      async newChat() { log.push({ type: 'newChat' }); },
+      async newChat() { url = 'https://m365.cloud.microsoft/chat?threadId=' + log.length; log.push({ type: 'newChat', url }); },
+      async resumeConversation(value) { url = value; log.push({ type: 'resume', url }); },
+      conversationInfo() { return { url, restorable: url.includes('threadId=') }; },
       async request(prompt, id, _status, wire) { log.push({ type: 'request', prompt, id }); return respond(prompt, id, wire); },
       async stop() { log.push({ type: 'stop' }); },
       async close() { log.push({ type: 'close' }); },
@@ -52,9 +58,9 @@ async function fixture(t, respond, enabled = true) {
   t.after(() => provider.dispose());
   const request = (messages = [message('안녕')], options = {}, token = cancellation(), parts = []) => ({
     parts, token,
-    done: provider.provideLanguageModelChatResponse(model, messages, { toolMode: 1, ...options }, { report: part => parts.push(part) }, token),
+    done: provider.provideLanguageModelChatResponse(model, messages, { toolMode: 1, modelOptions: { m365ConversationId: 'fixture' }, ...options }, { report: part => parts.push(part) }, token),
   });
-  return { provider, settings, log, vscode, request };
+  return { provider, settings, log, vscode, request, state };
 }
 
 test('model discovery is opt-in, silent and trust-aware without launching the browser', async t => {
@@ -71,23 +77,115 @@ test('model discovery is opt-in, silent and trust-aware without launching the br
 });
 
 test('text and tools round-trip preserve history, IDs and input; only the host executes tools', async t => {
+  let callId;
   const f = await fixture(t, (prompt, id, wire) => {
     const data = JSON.parse(prompt.split('DATA: ')[1]);
     if (data.messages.length === 1) return wire.parseReply(JSON.stringify({ requestId: id, kind: 'model', text: '읽겠습니다.', toolCalls: [{ id: 'read-1', name: tool.name, input: { path: 'src/main.js' } }] }), id);
-    assert.deepEqual(data.messages[1].content, [{ type: 'tool_call', id: 'read-1', name: tool.name, input: { path: 'src/main.js' } }]);
-    assert.deepEqual(data.messages[2].content, [{ type: 'tool_result', id: 'read-1', content: [{ type: 'text', text: 'const value = "한글";\n' }] }]);
+    assert.deepEqual(data.messages[1].content, [{ type: 'tool_call', id: callId, name: tool.name, input: { path: 'src/main.js' } }]);
+    assert.deepEqual(data.messages[2].content, [{ type: 'tool_result', id: callId, content: [{ type: 'text', text: 'const value = "한글";\n' }] }]);
     return wire.parseReply(JSON.stringify({ requestId: id, kind: 'model', text: '확인했습니다.', toolCalls: [] }), id);
   });
   const first = f.request([message('파일을 읽어줘')], { tools: [tool], toolMode: 2 });
   await first.done;
   assert.ok(first.parts[1] instanceof LanguageModelToolCallPart);
-  const second = f.request([message('파일을 읽어줘'), { role: 2, content: [first.parts[1]] }, { role: 1, content: [new LanguageModelToolResultPart('read-1', [new LanguageModelTextPart('const value = "한글";\n')])] }], { tools: [tool] });
+  callId = first.parts[1].callId;
+  assert.match(callId, /^m365_[a-f0-9]{32}$/);
+  const second = f.request([message('파일을 읽어줘'), { role: 2, content: [first.parts[1]] }, { role: 1, content: [new LanguageModelToolResultPart(callId, [new LanguageModelTextPart('const value = "한글";\n')])] }], { tools: [tool], modelOptions: {} });
   await second.done;
-  assert.equal(second.parts[0].value, '확인했습니다.');
-  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 2);
+  assert.equal(cleanText(second.parts[0].value), '확인했습니다.');
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 1);
   assert.equal(f.log.filter(entry => entry.type === 'close').length, 0);
   assert.equal(f.log.filter(entry => entry.type === 'create').length, 1, 'successful turns reuse one browser');
   assert.ok(f.log.filter(entry => entry.type === 'create').every(entry => entry.options.profile.endsWith('model-provider-profile') && entry.options.embedded === false));
+});
+
+test('native Chat identity survives text turns, A/B switching and provider restart without extra web chats', async t => {
+  const f = await fixture(t, (prompt, id) => {
+    assert.ok(!prompt.includes('[m365-chat:'), 'routing markers are not model input');
+    return { requestId: id, kind: 'model', text: 'Same conversation answer', toolCalls: [] };
+  });
+  const native = { modelOptions: {} };
+  const a = [message('identical first prompt')];
+  const first = f.request(a, native); await first.done;
+  a.push({ role: 2, content: first.parts }, message('follow up'));
+  const second = f.request(a, native); await second.done;
+  // An independently created Chat with identical first input must not be merged with A.
+  const b = f.request([message('identical first prompt')], native); await b.done;
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 2);
+  const urlA = f.log.find(entry => entry.type === 'newChat').url;
+  // Return to A using its latest assistant marker, then reload persisted mappings.
+  a.push({ role: 2, content: second.parts }, message('after switching'));
+  const returned = f.request(a, native); await returned.done;
+  assert.equal(f.log.at(-2).url, urlA);
+  await f.provider.retireBrowser();
+  f.provider.conversations = new ModelConversations(f.state);
+  a.push({ role: 2, content: returned.parts }, message('after restart'));
+  await f.request(a, native).done;
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 2);
+  assert.equal(f.log.filter(entry => entry.type === 'resume').at(-1).url, urlA);
+  const saved = JSON.stringify(f.state.get());
+  assert.ok(!saved.includes('identical first prompt') && !saved.includes('Same conversation answer'));
+});
+
+test('lost or stale Chat identity and failed restoration never fall back to a new web chat', async t => {
+  const f = await fixture(t, (_prompt, id) => ({ requestId: id, kind: 'model', text: 'answer', toolCalls: [] }));
+  const native = { modelOptions: {} }, a = [message('first')];
+  const first = f.request(a, native); await first.done;
+  a.push({ role: 2, content: first.parts }, message('next'));
+  const second = f.request(a, native); await second.done;
+  const submissions = () => f.log.filter(entry => entry.type === 'request').length;
+  await assert.rejects(f.request(a, native).done, /분기/);
+  await assert.rejects(f.request([message('first'), { role: 2, content: [new LanguageModelTextPart('marker stripped')] }, message('next')], native).done, /식별자/);
+  const third = [...a, { role: 2, content: second.parts }, message('third')];
+  f.provider.browser.resumeConversation = async () => { throw new Error('restore failed'); };
+  await assert.rejects(f.request(third, native).done, /restore failed/);
+  assert.equal(submissions(), 2);
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 1);
+  await f.request(third, native).done;
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 1);
+});
+
+test('failed first submission retries its recorded web chat and persistence failure closes the browser', async t => {
+  let attempt = 0;
+  const f = await fixture(t, (_prompt, id) => {
+    if (++attempt === 1) throw new Error('response lost');
+    return { requestId: id, kind: 'model', text: 'answer', toolCalls: [] };
+  });
+  await assert.rejects(f.request(undefined, { modelOptions: {} }).done, /response lost/);
+  await assert.rejects(f.request([message('안녕'), message('changed follow up after failure')], { modelOptions: {} }).done, /첫 응답/);
+  await f.request(undefined, { modelOptions: {} }).done;
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 1);
+  f.state.update = async () => { throw new Error('storage unavailable'); };
+  await assert.rejects(f.request().done, /storage unavailable/);
+  assert.equal(f.provider.browser, null);
+});
+
+test('shutdown during the first response saves its assigned web URL before closing the page', async t => {
+  const entered = deferred(), release = deferred();
+  const f = await fixture(t, async (_prompt, id) => {
+    entered.resolve(); await release.promise;
+    return { requestId: id, kind: 'model', text: 'late', toolCalls: [] };
+  });
+  const request = f.request();
+  const rejected = assert.rejects(request.done, CancellationError);
+  await entered.promise;
+  await f.provider.dispose();
+  const saved = f.state.get();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].url, f.log.find(entry => entry.type === 'newChat').url);
+  release.resolve(); await rejected;
+  assert.deepEqual(request.parts, []);
+});
+
+test('cancelling a queued explicit-session request cannot remove the first request routing record during startup', async t => {
+  const f = await fixture(t, (_prompt, id) => ({ requestId: id, kind: 'model', text: 'answer', toolCalls: [] }));
+  const first = f.request(), queued = f.request();
+  const rejected = assert.rejects(queued.done, CancellationError);
+  queued.token.cancel(); await rejected; await first.done;
+  const history = [message('안녕'), { role: 2, content: first.parts }, message('next')];
+  await f.request(history, { modelOptions: {} }).done;
+  assert.equal(f.log.filter(entry => entry.type === 'newChat').length, 1);
+  assert.equal(f.state.get().length, 1);
 });
 
 test('oversized history/tool definitions and unsupported input fail before opening a browser', async t => {
