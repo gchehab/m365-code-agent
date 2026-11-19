@@ -323,9 +323,15 @@ class AgentView {
       return;
     if (picks.length > 5) throw new Error('파일은 최대 5개까지 첨부할 수 있습니다.');
     const external = this.attachments.filter((file) => path.isAbsolute(file));
-    if (picks.length + external.length > 5)
+    const selected = new Map();
+    for (const file of [...external, ...picks.map((pick) => pick.label)]) {
+      const absolute = path.resolve(folder.uri.fsPath, file);
+      const key = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+      if (!selected.has(key)) selected.set(key, file);
+    }
+    if (selected.size > 5)
       throw new Error('이미지·문서·동영상을 포함해 파일은 최대 5개까지 첨부할 수 있습니다.');
-    this.attachments = [...external, ...picks.map((pick) => pick.label)];
+    this.attachments = [...selected.values()];
     this.view?.webview.postMessage({ type: 'attachments', files: this.attachments });
   }
   async attachLocalFiles() {
