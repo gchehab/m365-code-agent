@@ -28,7 +28,7 @@ Code, conversation context and tool results needed for a task are sent to the si
 
 Requires Windows, VS Code 1.106+ and Microsoft Edge. No separate Python or Node.js installation is needed to run the extension, although your project's build/test commands need their own runtimes. Remote WSL/SSH/container workspaces are outside this release's scope. In a multi-root workspace, select one local project folder.
 
-The extension does not import your normal Edge profile or passwords. The Webview uses its own persistent profile. Login expiry, MFA and CAPTCHA require your direct action. The extension UI and activity messages default to English and can be switched between available language packs (`en`, `ko`) in VS Code Settings (`m365Agent.language`), the sidebar **Reading settings** dropdown, or the `M365 Agent: Select Language` command; model answers default to your request's language and follow an explicit response-language instruction.
+The extension does not import your normal Edge profile or passwords. The Webview uses its own persistent profile. Login expiry, MFA and CAPTCHA require your direct action. The extension UI and activity messages default to English and can be switched between available language packs (`en`, `ko`, `pt-BR`) in VS Code Settings (`m365Agent.language`), the sidebar **Reading settings** dropdown, or the `M365 Agent: Select Language` command; model answers default to your request's language and follow an explicit response-language instruction.
 
 ## Experimental VS Code model provider
 

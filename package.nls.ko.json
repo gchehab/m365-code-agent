@@ -20,6 +20,7 @@
   "config.language.description": "M365 Code Agent UI, 메시지, 알림에 사용할 표시 언어입니다.",
   "config.language.en": "English (기본값)",
   "config.language.ko": "한국어 (Korean)",
+  "config.language.pt-BR": "Português (Brasil)",
   "config.experimental.modelProvider.maxPromptCharacters.description": "실험용 모델 제공자의 웹 요청 글자 한도. Webview의 한도와 별개입니다. 오래된 완결 교환을 생략할 수 있지만 System 지시·모든 사용자 요청·최근 도구 교환·도구 정의는 유지합니다. 웹 입력창의 실제 한도가 우선합니다.",
   "config.experimental.modelProvider.enabled.description": "실험용 M365 Web 모델을 VS Code 모델 선택기에 제공합니다. 별도 전용 브라우저에서 다시 로그인해야 합니다. VS Code 도구에는 Webview의 해시 검증·수정 범위·되돌리기가 적용되지 않으며 VS Code 승인 정책을 따릅니다.",
   "config.copilotUrl.description": "회사 M365 Copilot 또는 Code Assistant 에이전트의 웹 주소",

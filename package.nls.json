@@ -20,6 +20,7 @@
   "config.language.description": "Display language for the M365 Code Agent UI, messages, and notifications.",
   "config.language.en": "English (Default)",
   "config.language.ko": "한국어 (Korean)",
+  "config.language.pt-BR": "Português (Brasil)",
   "config.experimental.modelProvider.maxPromptCharacters.description": "Web request character limit for the experimental model provider. Separate from the Webview limit. Old completed exchanges may be omitted while retaining System instructions, all user requests, the latest tool exchange, and tool definitions. The actual web input box limit takes precedence.",
   "config.experimental.modelProvider.enabled.description": "Exposes the experimental M365 Web model in the VS Code model picker. Requires signing in again in a separate dedicated browser. Webview hash verification, edit range checks, and undo do not apply to VS Code tools, which follow VS Code approval policies.",
   "config.copilotUrl.description": "Web URL of your company M365 Copilot or Code Assistant agent.",

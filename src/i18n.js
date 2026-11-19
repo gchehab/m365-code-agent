@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const en = require('./locales/en');
 const ko = require('./locales/ko');
+const ptBR = require('./locales/pt-BR');
 
 /**
  * @typedef {{
@@ -39,15 +40,21 @@ function registerLanguagePack(pack) {
   if (!pack || typeof pack.code !== 'string' || !pack.code.trim()) {
     throw new Error('Language pack requires a valid language code.');
   }
-  const code = pack.code.trim().toLowerCase();
-  packs.set(code, {
-    code,
-    label: typeof pack.label === 'string' && pack.label.trim() ? pack.label.trim() : code,
-    htmlLang: typeof pack.htmlLang === 'string' && pack.htmlLang.trim() ? pack.htmlLang.trim() : code,
+  const canonicalCode = pack.code.trim();
+  const key = canonicalCode.toLowerCase();
+  packs.set(key, {
+    code: canonicalCode,
+    label: typeof pack.label === 'string' && pack.label.trim() ? pack.label.trim() : canonicalCode,
+    htmlLang:
+      typeof pack.htmlLang === 'string' && pack.htmlLang.trim() ? pack.htmlLang.trim() : canonicalCode,
     browserLocale:
-      typeof pack.browserLocale === 'string' && pack.browserLocale.trim() ? pack.browserLocale.trim() : code,
+      typeof pack.browserLocale === 'string' && pack.browserLocale.trim()
+        ? pack.browserLocale.trim()
+        : canonicalCode,
     dateLocale:
-      typeof pack.dateLocale === 'string' && pack.dateLocale.trim() ? pack.dateLocale.trim() : code,
+      typeof pack.dateLocale === 'string' && pack.dateLocale.trim()
+        ? pack.dateLocale.trim()
+        : canonicalCode,
     ui: { ...en.ui, ...(pack.ui || {}) },
     messages: { ...en.messages, ...(pack.messages || {}) },
   });
@@ -55,6 +62,7 @@ function registerLanguagePack(pack) {
 
 registerLanguagePack(en);
 registerLanguagePack(ko);
+registerLanguagePack(ptBR);
 
 try {
   const localesDir = path.join(__dirname, 'locales');
@@ -70,16 +78,21 @@ try {
     }
   }
 } catch {
-  /* Built-in en and ko packs are already registered. */
+  /* Built-in en, ko, and pt-BR packs are already registered. */
 }
 
 /** @param {string | undefined | null} code @returns {string} */
 function normalizeLanguage(code) {
   if (typeof code !== 'string' || !code.trim()) return DEFAULT_LANGUAGE;
-  const clean = code.trim().toLowerCase();
-  if (packs.has(clean)) return clean;
-  const primary = clean.split(/[-_]/)[0];
-  if (packs.has(primary)) return primary;
+  const clean = code.trim().replace(/_/g, '-').toLowerCase();
+  const exact = packs.get(clean);
+  if (exact) return exact.code;
+  const primary = clean.split('-')[0];
+  const primaryMatch = packs.get(primary);
+  if (primaryMatch) return primaryMatch.code;
+  for (const [key, pack] of packs.entries()) {
+    if (key.split('-')[0] === primary) return pack.code;
+  }
   return DEFAULT_LANGUAGE;
 }
 
@@ -108,7 +121,7 @@ function getAvailableLanguages() {
 /** @param {string} [code] @returns {LanguagePack} */
 function getLanguagePack(code) {
   const resolved = code ? normalizeLanguage(code) : currentLanguage;
-  return /** @type {LanguagePack} */ (packs.get(resolved) || packs.get(DEFAULT_LANGUAGE));
+  return /** @type {LanguagePack} */ (packs.get(resolved.toLowerCase()) || packs.get(DEFAULT_LANGUAGE));
 }
 
 /**

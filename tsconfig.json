@@ -16,6 +16,7 @@
     "src/i18n.js",
     "src/locales/en.js",
     "src/locales/ko.js",
+    "src/locales/pt-BR.js",
     "src/workspace.js",
     "src/tool-call.js",
     "src/changes.js",

@@ -192,11 +192,13 @@
           "type": "string",
           "enum": [
             "en",
-            "ko"
+            "ko",
+            "pt-BR"
           ],
           "enumDescriptions": [
             "%config.language.en%",
-            "%config.language.ko%"
+            "%config.language.ko%",
+            "%config.language.pt-BR%"
           ],
           "default": "en",
           "description": "%config.language.description%"

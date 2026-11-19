@@ -15,9 +15,11 @@ const {
 } = require('../src/i18n');
 const enPack = require('../src/locales/en');
 const koPack = require('../src/locales/ko');
+const ptBrPack = require('../src/locales/pt-BR');
 const packageJson = require('../package.json');
 const nlsEn = require('../package.nls.json');
 const nlsKo = require('../package.nls.ko.json');
+const nlsPtBr = require('../package.nls.pt-br.json');
 const { renderWebview } = require('../src/view');
 const { renderBrowserPanel } = require('../src/browser-panel');
 const { renderResponse } = require('../src/response-panel');
@@ -62,22 +64,26 @@ test('i18n defaults to English, exposes available languages in settings, and swi
   assert.equal(getLanguage(), 'en');
 
   const available = getAvailableLanguages();
-  assert.ok(available.length >= 2);
+  assert.ok(available.length >= 3);
   assert.equal(available[0].code, 'en');
   assert.equal(available[0].label, 'English');
   assert.ok(available.some((item) => item.code === 'ko' && item.label.includes('한국어')));
+  assert.ok(available.some((item) => item.code === 'pt-BR' && item.label === 'Português (Brasil)'));
 
   // Settings schema in package.json defaults to English and lists available languages
   const langSetting = packageJson.contributes.configuration.properties['m365Agent.language'];
   assert.ok(langSetting);
   assert.equal(langSetting.default, 'en');
-  assert.deepEqual(langSetting.enum, ['en', 'ko']);
+  assert.deepEqual(langSetting.enum, ['en', 'ko', 'pt-BR']);
 
-  // Every NLS key in package.nls.json and package.nls.ko.json matches
+  // Every NLS key in package.nls.json, package.nls.ko.json, and package.nls.pt-br.json matches
   assert.deepEqual(Object.keys(nlsEn).sort(), Object.keys(nlsKo).sort());
-  // Every UI and message key in en.js and ko.js matches
+  assert.deepEqual(Object.keys(nlsEn).sort(), Object.keys(nlsPtBr).sort());
+  // Every UI and message key in en.js, ko.js, and pt-BR.js matches
   assert.deepEqual(Object.keys(enPack.ui).sort(), Object.keys(koPack.ui).sort());
+  assert.deepEqual(Object.keys(enPack.ui).sort(), Object.keys(ptBrPack.ui).sort());
   assert.deepEqual(Object.keys(enPack.messages).sort(), Object.keys(koPack.messages).sort());
+  assert.deepEqual(Object.keys(enPack.messages).sort(), Object.keys(ptBrPack.messages).sort());
 
   // Default English messages and webviews
   assert.equal(ui('attachLocal'), 'Images/Docs/Video');
@@ -129,6 +135,25 @@ test('i18n defaults to English, exposes available languages in settings, and swi
   assert.match(webviewKo, /<html lang="ko">/);
   assert.match(webviewKo, /<option value="ko" selected>한국어 \(Korean\)<\/option>/);
   assert.match(webviewKo, /이미지·문서·동영상/);
+
+  // Switch to Brazilian Portuguese
+  setLanguage('pt-BR');
+  assert.equal(getLanguage(), 'pt-BR');
+  assert.equal(ui('attachLocal'), 'Imagens/Docs/Vídeo');
+  assert.equal(t('errInvalidToolArgsJson'), 'O formato JSON dos argumentos da ferramenta é inválido.');
+  assert.throws(
+    () => normalizeToolCall({ name: 'read_file', arguments: '{broken' }),
+    /O formato JSON dos argumentos da ferramenta é inválido/,
+  );
+
+  const webviewPt = renderWebview({
+    nonce: 'n',
+    cspSource: 'https://test',
+    resource: (name) => 'https://test/' + name,
+  });
+  assert.match(webviewPt, /<html lang="pt-BR">/);
+  assert.match(webviewPt, /<option value="pt-BR" selected>Português \(Brasil\)<\/option>/);
+  assert.match(webviewPt, /Imagens\/Docs\/Vídeo/);
 });
 
 test('custom partial language packs inherit missing keys from the default English pack', (t) => {
