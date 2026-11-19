@@ -1,5 +1,6 @@
 // @ts-check
 'use strict';
+const { jsonValue } = require('./mcp');
 /** @typedef {import('../types/contracts').ToolCall} ToolCall */
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
@@ -29,19 +30,20 @@ function normalizeToolCall(value) {
   const result = { name };
   /** @param {string} key @param {string | undefined} alias */
   const argument = (key, alias) => value[key] ?? args[key] ?? (alias ? args[alias] : undefined);
-  for (const key of /** @type {const} */ (['path', 'query', 'command'])) {
+  for (const key of /** @type {const} */ (['path', 'query', 'command', 'tool'])) {
     const entry = argument(key, key === 'path' ? 'file_path' : undefined);
     if (entry === undefined) continue;
     if (typeof entry !== 'string') throw new Error(`${key}는 문자열이어야 합니다.`);
     result[key] = entry;
   }
   const aliases = {
+    offset: undefined,
     limit: undefined,
     startLine: 'start_line',
     startColumn: 'start_column',
     lineCount: 'line_count',
   };
-  for (const key of /** @type {const} */ (['limit', 'startLine', 'startColumn', 'lineCount'])) {
+  for (const key of /** @type {const} */ (['limit', 'startLine', 'startColumn', 'lineCount', 'offset'])) {
     const entry = argument(key, aliases[key]);
     if (entry === undefined) continue;
     if (typeof entry !== 'number' || !Number.isFinite(entry))
@@ -56,6 +58,11 @@ function normalizeToolCall(value) {
     )
       throw new Error('paths는 문자열 또는 문자열 배열이어야 합니다.');
     result.paths = paths;
+  }
+  const input = Object.hasOwn(value, 'input') ? value.input : args.input;
+  if (input !== undefined) {
+    if (!isRecord(input)) throw new Error('MCP input은 JSON 객체여야 합니다.');
+    result.input = /** @type {Record<string, unknown>} */ (jsonValue(input));
   }
   return result;
 }

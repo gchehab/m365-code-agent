@@ -3,6 +3,7 @@
 const { buildPrompt, newId, normalizeToolCall, toolCallLimit } = require('./protocol');
 const { inspectProject } = require('./project');
 const { TaskProgress } = require('./task-progress');
+const { commandEnvironment } = require('./terminal');
 /** @param {string | undefined} value @param {string} field @returns {string} */
 function requiredText(value, field) {
   if (typeof value !== 'string' || !value) throw new Error(`${field} 문자열이 필요합니다.`);
@@ -24,6 +25,8 @@ class CodingAgent {
     unlimitedRounds = false,
     maxRounds = 100,
     maxPromptCharacters = 12000,
+    initialPaths,
+    mcp,
   }) {
     this.store = store;
     this.transport = transport;
@@ -37,11 +40,14 @@ class CodingAgent {
     this.unlimitedRounds = unlimitedRounds === true;
     this.maxRounds = Number.isFinite(maxRounds) ? Math.max(1, Math.min(500, Math.floor(maxRounds))) : 100;
     this.maxPromptCharacters = maxPromptCharacters;
+    this.initialPaths = initialPaths;
+    this.mcp = mcp;
     this.cancelled = false;
     this.running = false;
   }
   async stop() {
     this.cancelled = true;
+    this.mcp?.cancel();
     await this.transport.stop();
   }
   /** @param {string} task */
@@ -63,7 +69,14 @@ class CodingAgent {
     const progress = new TaskProgress();
     try {
       this.emit({ type: 'message', role: 'user', text: task });
-      const project = await inspectProject(this.store, task, promptBudget, this.emit, () => this.cancelled);
+      const project = await inspectProject(
+        this.store,
+        task,
+        promptBudget,
+        this.emit,
+        () => this.cancelled,
+        this.initialPaths,
+      );
       const files = project.files;
       history.push(project.history);
       if (project.discovered && !project.read && !project.inspected)
@@ -97,12 +110,14 @@ class CodingAgent {
             id,
             task,
             workspace: require('node:path').basename(this.store.root),
+            environment: commandEnvironment(this.store.root),
             files,
             history,
             extraContext,
             mode: this.mode,
             intent: this.intent,
             autoApprove: this.autoApprove,
+            hasMcp: Boolean(this.mcp),
             progress: progress.snapshot(round, limit, appliedFiles),
             maxCharacters: promptBudget,
           });
@@ -159,7 +174,7 @@ class CodingAgent {
               continue;
             }
             const toolId = newId();
-            const label = `${call.name} · ${call.path || call.query || call.command || '프로젝트'}`;
+            const label = `${call.name} · ${call.path || call.query || call.command || call.tool || '프로젝트'}`;
             this.emit({ type: 'tool', id: toolId, label, state: 'running' });
             try {
               /** @type {import('../types/contracts').ToolResult} */
@@ -181,13 +196,33 @@ class CodingAgent {
                 result = await this.store.folderInfo(requiredText(call.path, 'path'), () => this.cancelled);
               else if (call.name === 'list_files') result = await this.store.listFiles(call.limit, call.path);
               else if (call.name === 'search_text')
-                result = await this.store.search(requiredText(call.query, 'query'), call.paths);
+                result = await this.store.search(
+                  requiredText(call.query, 'query'),
+                  call.paths,
+                  () => this.cancelled,
+                );
+              else if (call.name === 'search_code')
+                result = await this.store.searchCode(
+                  requiredText(call.query, 'query'),
+                  call.paths,
+                  () => this.cancelled,
+                );
               else if (call.name === 'run_command') {
                 if (this.mode !== 'agent' || !this.runCommand)
                   throw new Error(
                     '이번 요청은 읽기 전용 분석입니다. 명령 실행이 필요하면 실행할 작업을 요청하세요.',
                   );
                 result = await this.runCommand(requiredText(call.command, 'command'));
+              } else if (['mcp_list_tools', 'mcp_tool_info', 'mcp_call'].includes(call.name)) {
+                if (this.mode !== 'agent' || !this.mcp)
+                  throw new Error('MCP 실행은 조회용 도구를 선택한 Agent 요청에서만 사용할 수 있습니다.');
+                if (call.name === 'mcp_list_tools') result = this.mcp.list(resultBudget, call.offset);
+                else if (call.name === 'mcp_tool_info')
+                  result = this.mcp.info(requiredText(call.tool, 'tool'), resultBudget);
+                else {
+                  if (!call.input) throw new Error('MCP input 객체가 필요합니다.');
+                  result = await this.mcp.invoke(requiredText(call.tool, 'tool'), call.input, resultBudget);
+                }
               } else throw new Error('지원하지 않는 도구입니다.');
               if (Array.isArray(result.files))
                 while (JSON.stringify(result).length > resultBudget && result.files.length > 1) {
@@ -227,7 +262,7 @@ class CodingAgent {
                           : undefined,
               });
             } catch (error) {
-              if (this.cancelled) throw error;
+              if (this.cancelled || ['MCP_CANCELLED', 'MCP_UNCERTAIN'].includes(error.code)) throw error;
               observations.push({ call, error: error.message });
               fresh = progress.failure(error) || fresh;
               this.emit({ type: 'tool', id: toolId, label, state: 'error', detail: error.message });
@@ -365,6 +400,7 @@ class CodingAgent {
         `안전 한도 ${this.maxRounds}회에 도달해 중지했습니다. 실제 적용한 파일: ${appliedFiles}개. 적용 내역은 유지됩니다. 필요한 작업을 이어서 요청하거나 m365Agent.maxRounds를 조정하세요.`,
       );
     } finally {
+      this.mcp?.dispose();
       this.running = false;
       this.emit({ type: 'idle' });
     }

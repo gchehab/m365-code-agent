@@ -4,10 +4,26 @@ export interface ToolCall {
   query?: string;
   paths?: string | string[];
   command?: string;
+  tool?: string;
+  input?: Record<string, unknown>;
+  offset?: number;
   limit?: number;
   startLine?: number;
   startColumn?: number;
   lineCount?: number;
+}
+
+export interface DiscoveryOptions {
+  paths?: string | string[];
+  limit?: number;
+  maxDirectories?: number;
+  cancelled?: () => boolean;
+}
+export interface FileDiscovery {
+  files: string[];
+  directories: string[];
+  truncated: boolean;
+  reasons: string[];
 }
 
 export type ChangeProposal =
@@ -78,6 +94,12 @@ export interface CommandResult {
   encoding?: string;
 }
 export interface ToolResult extends CommandResult {
+  name?: string;
+  description?: string;
+  inputSchema?: object;
+  tools?: { name: string; description: string }[];
+  omittedParts?: number;
+  nextOffset?: number | null;
   path?: string;
   kind?: 'file' | 'directory';
   hash?: string;
@@ -86,7 +108,7 @@ export interface ToolResult extends CommandResult {
   startLine?: number;
   endLine?: number;
   files?: string[];
-  matches?: { path: string; line: number; text: string }[];
+  matches?: { path: string; line: number; column?: number; text: string }[];
 }
 export interface ToolObservation {
   call: ToolCall;
@@ -109,6 +131,7 @@ export interface HostEvent {
   [key: string]: unknown;
 }
 export interface AgentOptions {
+  mcp?: McpSession;
   store: import('../src/workspace').WorkspaceStore;
   transport: {
     promptCharacterLimit?: number;
@@ -125,6 +148,14 @@ export interface AgentOptions {
   unlimitedRounds?: boolean;
   maxRounds?: number;
   maxPromptCharacters?: number;
+  initialPaths?: string[];
+}
+export interface McpSession {
+  list(maxCharacters: number, offset?: number): ToolResult;
+  info(tool: string, maxCharacters: number): ToolResult;
+  invoke(tool: string, input: Record<string, unknown>, maxCharacters: number): Promise<ToolResult>;
+  cancel(): void;
+  dispose(): void;
 }
 export interface ChangeHost {
   taskId?: string;

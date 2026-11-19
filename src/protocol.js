@@ -4,7 +4,7 @@ const newId = () => crypto.randomUUID();
 const { replyIdentity, mergeReplies } = require('./reply-merge');
 const { normalizeToolCall } = require('./tool-call');
 
-function parseReply(text, expectedId) {
+function parseJsonReplies(text, expectedId) {
   if (typeof text !== 'string' || text.length > 1024 * 1024)
     throw new Error('응답 크기 또는 형식이 올바르지 않습니다.');
   const candidates = [text.trim()];
@@ -29,7 +29,6 @@ function parseReply(text, expectedId) {
     }
   }
   const replies = [];
-  let schemaError;
   for (let candidate of new Set(candidates)) {
     // Browser code editors use NBSP for indentation. Normalize it only outside
     // JSON strings so source code/string values remain byte-for-byte intact.
@@ -51,41 +50,47 @@ function parseReply(text, expectedId) {
     } catch {
       continue;
     }
-    if (value && value.requestId === expectedId) {
-      let error;
-      if (!['tools', 'changes', 'done'].includes(value.kind))
-        error = '응답의 kind가 tools/changes/done 중 하나가 아닙니다.';
-      else if (
-        value.kind === 'tools' &&
-        (!Array.isArray(value.calls) || !value.calls.length || value.calls.length > 8)
-      )
-        error = '도구 요청은 1~8개여야 합니다.';
-      else if (value.kind === 'tools') {
-        try {
-          value.calls = value.calls.map(normalizeToolCall);
-        } catch {
-          error = '도구 이름 또는 인자 형식이 올바르지 않습니다.';
-        }
-      } else if (value.kind === 'changes' && !Array.isArray(value.files))
-        error = '변경 파일 목록이 없습니다.';
-      else if (
-        value.kind === 'changes' &&
-        value.files.some(
-          (file) =>
-            !file ||
-            typeof file !== 'object' ||
-            (file.edits !== undefined &&
-              (!Array.isArray(file.edits) || file.edits.some((edit) => !edit || typeof edit !== 'object'))),
-        )
-      )
-        error = '변경 파일 또는 부분 수정 형식이 올바르지 않습니다.';
-      else if (value.kind === 'done' && typeof value.message !== 'string') error = '완료 설명이 없습니다.';
-      if (error) {
-        schemaError = error;
-        continue;
+    if (value && value.requestId === expectedId) replies.push(value);
+  }
+  return replies;
+}
+
+function parseReply(text, expectedId) {
+  const replies = [];
+  let schemaError;
+  for (const value of parseJsonReplies(text, expectedId)) {
+    let error;
+    if (!['tools', 'changes', 'done'].includes(value.kind))
+      error = '응답의 kind가 tools/changes/done 중 하나가 아닙니다.';
+    else if (
+      value.kind === 'tools' &&
+      (!Array.isArray(value.calls) || !value.calls.length || value.calls.length > 8)
+    )
+      error = '도구 요청은 1~8개여야 합니다.';
+    else if (value.kind === 'tools') {
+      try {
+        value.calls = value.calls.map(normalizeToolCall);
+      } catch {
+        error = '도구 이름 또는 인자 형식이 올바르지 않습니다.';
       }
-      replies.push(value);
+    } else if (value.kind === 'changes' && !Array.isArray(value.files)) error = '변경 파일 목록이 없습니다.';
+    else if (
+      value.kind === 'changes' &&
+      value.files.some(
+        (file) =>
+          !file ||
+          typeof file !== 'object' ||
+          (file.edits !== undefined &&
+            (!Array.isArray(file.edits) || file.edits.some((edit) => !edit || typeof edit !== 'object'))),
+      )
+    )
+      error = '변경 파일 또는 부분 수정 형식이 올바르지 않습니다.';
+    else if (value.kind === 'done' && typeof value.message !== 'string') error = '완료 설명이 없습니다.';
+    if (error) {
+      schemaError = error;
+      continue;
     }
+    replies.push(value);
   }
   if (replies.length) return mergeReplies(replies, expectedId);
   const error = new Error(schemaError || '현재 요청 ID와 일치하는 완전한 JSON 응답을 찾지 못했습니다.');
@@ -96,11 +101,12 @@ function parseReply(text, expectedId) {
 function toolCallLimit(maxCharacters = 12000) {
   return Math.max(1, Math.min(4, Math.floor((maxCharacters - 3500) / 4000)));
 }
-/** @param {{id: string, task: string, workspace: string, files?: unknown, history?: import('../types/contracts').HistoryEntry[], extraContext?: unknown, mode?: string, intent?: string, autoApprove?: boolean, progress?: object, maxCharacters?: number}} options */
+/** @param {{id: string, task: string, workspace: string, environment?: {platform: string, shell: string, cwd: string}, files?: unknown, history?: import('../types/contracts').HistoryEntry[], extraContext?: unknown, mode?: string, intent?: string, autoApprove?: boolean, progress?: object, hasMcp?: boolean, maxCharacters?: number}} options */
 function buildPrompt({
   id,
   task,
   workspace,
+  environment,
   files,
   history = [],
   extraContext,
@@ -108,15 +114,22 @@ function buildPrompt({
   intent,
   autoApprove = false,
   progress,
+  hasMcp = false,
   maxCharacters = 12000,
 }) {
   const exampleId = '<current requestId>';
   const tools = [
+    'search_code(query,paths=optional scope) for ranked snippets',
     'list_files(limit<=1000,path=optional directory)',
     'read_file(path,startLine=1,startColumn=1,lineCount<=200)',
     'search_text(query,paths)',
     'file_info(path) for byte hash/size',
     'folder_info(path) for tree hash/backup',
+    ...(mode === 'agent' && hasMcp
+      ? [
+          'mcp_list_tools(offset=0; continue with nextOffset), mcp_tool_info(tool), mcp_call(tool,input) for approved lookups only',
+        ]
+      : []),
     ...(mode === 'agent'
       ? ['run_command(command) for local shell execution under host approval policy']
       : []),
@@ -131,6 +144,17 @@ function buildPrompt({
       : 'Commands need user approval. Changes need local validation/approval; execution configs always need review.';
   const agentInstructions = [
     `Agent: request run_command for commands; the host handles approval. Do not wait for approval in prose. `,
+    ...(hasMcp
+      ? [
+          'MCP: list tools, inspect the schema, then request mcp_call with tool and input object. The host ALWAYS asks approval, even with automatic approval on; do not ask in prose. File edits must use changes, never MCP. ',
+        ]
+      : []),
+    ...(environment
+      ? [
+          `DATA.environment is the actual command host: platform, shell and absolute cwd. Commands run in a background process, not the VS Code terminal; interactive terminal profiles and state are not shared. `,
+          `Use that shell's syntax: cmd.exe uses dir, set NAME=value and &&, not PowerShell Get-ChildItem/$env:NAME or Unix export. /bin/sh uses POSIX syntax, not Bash-only features. Use an explicit installed interpreter when needed. `,
+        ]
+      : []),
     `${approvalInstructions} Edit only when the user requests actual changes. `,
     `edit.oldText: read, unique, nonoverlapping. `,
     `New file: action=create, baseHash=null, content=COMPLETE file. `,
@@ -184,6 +208,7 @@ function buildPrompt({
     task,
     workspace,
     mode,
+    ...(mode === 'agent' && environment ? { environment } : {}),
     ...(progress ? { progress } : {}),
     ...(intent ? { intent } : {}),
     files: files || { files: [], truncated: false },
@@ -205,6 +230,8 @@ function buildPrompt({
   while (render().length > maxCharacters && payload.history.length > 1) payload.history.shift();
   if (payload.files && Array.isArray(payload.files.files)) {
     payload.files = { ...payload.files, files: [...payload.files.files] };
+    if (render().length > maxCharacters && payload.files.searchCoverage)
+      payload.files.searchCoverage = { incomplete: payload.files.searchCoverage.incomplete };
     while (render().length > maxCharacters && payload.files.files.length) {
       payload.files.files = payload.files.files.slice(0, Math.floor(payload.files.files.length / 2));
       payload.files.truncated = true;
@@ -220,7 +247,20 @@ function buildPrompt({
   }
   if (render().length > maxCharacters && context?.length) {
     payload.context = Array.isArray(context)
-      ? context.map((file) => ({ path: file.path, omitted: '본문은 read_file로 요청하세요.' }))
+      ? context.map((file) => ({
+          path: file.path,
+          ...(file.range ? { range: file.range } : {}),
+          ...(file.diagnostics
+            ? {
+                diagnostics: file.diagnostics.map((diagnostic) => ({
+                  ...diagnostic,
+                  message: diagnostic.message.slice(0, 200),
+                  truncated: diagnostic.truncated || diagnostic.message.length > 200,
+                })),
+              }
+            : {}),
+          omitted: '본문은 read_file로 요청하세요.',
+        }))
       : '첨부 문맥 생략: 필요한 파일은 read_file로 요청하세요.';
   }
   if (render().length > maxCharacters && payload.history.length) {
@@ -279,6 +319,7 @@ function buildPrompt({
 }
 
 module.exports = {
+  parseJsonReplies,
   parseReply,
   buildPrompt,
   newId,

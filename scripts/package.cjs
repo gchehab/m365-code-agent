@@ -8,7 +8,7 @@ const { listFiles, PackageManager } = require('@vscode/vsce');
   const root = path.resolve(__dirname, '..');
   const files = await listFiles({ cwd: root, packageManager: PackageManager.Npm });
   const privatePath =
-    /(^|[/\\])(\.test-output|\.vscode-test|edge-profile|\.git)([/\\]|$)|(^|[/\\])(?:Cookies|Login Data|Local State|\.env[^/\\]*|\.npmrc)$|\.(pem|pfx|p12|key)$/i;
+    /(^|[/\\])(\.test-output|\.vscode-test|edge-profile|model-provider-profile|\.git)([/\\]|$)|(^|[/\\])(?:Cookies|Login Data|Local State|\.env[^/\\]*|\.npmrc)$|\.(pem|pfx|p12|key)$/i;
   if (files.some((file) => privatePath.test(file)))
     throw new Error('패키지에 테스트 프로필·자격 증명 경로가 포함됐습니다. 배포를 중단합니다.');
   const tracked = spawnSync('git', ['ls-files', '--', '.test-output', '.vscode-test'], {

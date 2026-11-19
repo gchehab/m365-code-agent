@@ -34,6 +34,7 @@ function renderWebview({ nonce, cspSource, resource }) {
 <button id="syncWeb" role="menuitem">${icon('sync')}웹 대화 동기화</button>
 <button id="checkWorkspace" role="menuitem" title="M365 없이 코드 읽기와 임시 파일 쓰기·삭제를 점검합니다.">프로젝트 점검</button>
 <button id="diagnostics" role="menuitem">${icon('info')}연결 진단</button>
+<button id="mcpTools" role="menuitem">조회용 MCP 도구 선택</button>
 </div>
 </header>
 <section id="historyPanel" hidden aria-label="대화 기록">
@@ -90,9 +91,10 @@ function renderWebview({ nonce, cspSource, resource }) {
 </div>
 </section>
 <section id="approval" hidden>
-<strong>명령 실행 승인</strong>
+<strong id="approvalTitle">명령 실행 승인</strong>
 <p id="commandRoot">
 </p>
+<p id="approvalNote" hidden></p>
 <pre id="commandText">
 </pre>
 <div id="commandChanges">

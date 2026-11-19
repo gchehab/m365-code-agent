@@ -1,6 +1,17 @@
 'use strict';
 const { spawn } = require('node:child_process');
 const { TextDecoder } = require('node:util');
+const path = require('node:path');
+
+// Match Node's background-shell defaults, not VS Code's interactive terminal.
+/** @param {string} cwd */
+function commandEnvironment(cwd) {
+  return {
+    platform: process.platform,
+    shell: process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : '/bin/sh',
+    cwd: path.resolve(cwd),
+  };
+}
 
 function outputDecoder(encoding = 'utf8') {
   const decoder = new TextDecoder(encoding === 'cp949' ? 'euc-kr' : 'utf-8');
@@ -20,13 +31,14 @@ class CommandRunner {
         cancelled = false,
         finished = false;
       const encoding = this.encoding || 'utf8';
+      const environment = commandEnvironment(cwd);
       const shellCommand =
         process.platform === 'win32'
           ? `chcp ${encoding === 'cp949' ? '949' : '65001'}>nul && ${command}`
           : command;
       const child = spawn(shellCommand, {
-        cwd,
-        shell: true,
+        cwd: environment.cwd,
+        shell: environment.shell,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -73,4 +85,4 @@ class CommandRunner {
     this.cancel?.();
   }
 }
-module.exports = { CommandRunner, outputDecoder };
+module.exports = { CommandRunner, outputDecoder, commandEnvironment };

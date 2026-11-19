@@ -20,6 +20,9 @@ const { ChangeController } = require('./changes');
 const { BrowserPanel } = require('./browser-panel');
 const { ResponsePanel } = require('./response-panel');
 const { connectionError, environmentDiagnostics } = require('./connection');
+const { EditorActions } = require('./editor-actions');
+const { McpBridge } = require('./mcp');
+const { registerModelProvider } = require('./model-provider');
 
 class AgentView {
   constructor(context) {
@@ -29,6 +32,8 @@ class AgentView {
     this.changes = new ChangeController(this, vscode);
     this.browserPanel = new BrowserPanel(this, vscode);
     this.responsePanel = new ResponsePanel(this, vscode);
+    this.editorActions = new EditorActions(this, vscode);
+    this.mcpBridge = new McpBridge(this, vscode);
     this.sessions = context.workspaceState.get('sessions', []);
     this.sessionId = context.workspaceState.get('activeSession');
     this.events = this.sessions.find((session) => session.id === this.sessionId)?.events || [];
@@ -85,6 +90,7 @@ class AgentView {
       models: this.modelChoices,
       selectedModel: this.selectedModel,
       progress: this.progress,
+      executionPolicy: this.executionPolicy,
       sessions: this.conversations.summaries(),
     };
   }
@@ -364,6 +370,7 @@ class AgentView {
   }
   async stop() {
     this.stopRequested = true;
+    this.mcpBridge.cancel();
     this.conversations.invalidate();
     this.runner.stop();
     if (this.pending) {
@@ -392,16 +399,27 @@ class AgentView {
     this.taskId = crypto.randomUUID();
     this.conversations.invalidate();
     this.stopRequested = false;
-    this.post({ type: 'busy' });
+    this.executionPolicy = {
+      autoApprove: message.autoApprove === true,
+      review: Boolean(message.review),
+      unlimitedRounds: message.unlimitedRounds === true,
+    };
+    this.post({ type: 'busy', policy: this.executionPolicy });
     let errorMessage;
     try {
-      const folder = await this.rootFolder();
+      const folder = message.editorTarget
+        ? this.editorActions.folder(message.editorTarget)
+        : await this.rootFolder();
+      const targetStore = message.editorTarget ? await this.workspaceStore(folder) : null;
+      if (message.editorTarget) await this.editorActions.context(message.editorTarget, targetStore);
       const browser = await this.ensureBrowser();
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
-      const store = await this.workspaceStore(folder);
+      const store = targetStore || (await this.workspaceStore(folder));
       this.workspaceInfo = { name: folder.name, path: store.root };
       this.post({ type: 'workspace', ...this.workspaceInfo });
       const contextFiles = [];
+      if (message.editorTarget)
+        contextFiles.push(await this.editorActions.context(message.editorTarget, store));
       const editor = vscode.window.activeTextEditor;
       if (message.includeEditor && editor && editor.document.uri.scheme === 'file') {
         const relative = path.relative(folder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, '/');
@@ -431,7 +449,7 @@ class AgentView {
           /* Outside-root or ignored files are not attached. */
         }
       }
-      for (const relative of this.attachments) {
+      for (const relative of message.editorTarget ? [] : this.attachments) {
         if (contextFiles.some((file) => file.path === relative && !file.selectionOnly)) continue;
         const file = await store.readFile(relative);
         if (file.content.length > 10000) {
@@ -461,7 +479,14 @@ class AgentView {
         }
       }
       if (this.stopRequested) throw new Error('작업을 중지했습니다.');
+      if (message.editorTarget) {
+        contextFiles[0] = await this.editorActions.context(message.editorTarget, store);
+      }
+      const mcp = this.mcpBridge.createSession(store.root, mode);
+      this.executionPolicy.mcpRequiresApproval = Boolean(mcp);
+      this.post({ type: 'busy', policy: this.executionPolicy });
       this.agent = new CodingAgent({
+        mcp,
         store,
         transport: browser,
         emit: (event) => this.post(event),
@@ -474,6 +499,7 @@ class AgentView {
         ),
         maxRounds: this.config().get('maxRounds'),
         maxPromptCharacters: this.config().get('maxPromptCharacters'),
+        initialPaths: message.editorTarget ? [contextFiles[0].path] : undefined,
         runCommand: (command) => this.runCommand(command, folder.uri.fsPath, autoApprove),
         approveAndApply: (changes, summary) =>
           this.stageAndApply(store, changes, summary, Boolean(message.review), autoApprove),
@@ -484,6 +510,8 @@ class AgentView {
       this.post({ type: 'message', role: 'system', text: error.message });
     } finally {
       this.starting = false;
+      this.executionPolicy = null;
+      this.mcpBridge.active?.dispose();
       this.post({ type: 'idle' });
       this.post({
         type: 'runResult',
@@ -539,7 +567,8 @@ class AgentView {
     if (message.type === 'connect') return this.connect();
     if (message.type === 'newChat') return this.newChat();
     if (message.type === 'diagnostics') return this.diagnostics();
-    if (message.type === 'run') return this.start(message);
+    if (message.type === 'mcpTools') return this.mcpBridge.select();
+    if (message.type === 'run') return this.start({ ...message, editorTarget: undefined });
     if (message.type === 'stop') return this.stop();
     if (message.type === 'apply' || message.type === 'reject') {
       if (this.pending?.kind === 'changes' && message.token === this.pending.viewData.token) {
@@ -593,6 +622,8 @@ class AgentView {
 
 function activate(context) {
   const provider = new AgentView(context);
+  const modelProvider = registerModelProvider(context, vscode);
+  context.subscriptions.push(...provider.editorActions.register());
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('m365Agent.chat', provider, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -624,11 +655,12 @@ function activate(context) {
   command('m365Agent.checkWorkspace', () => provider.checkWorkspace());
   command('m365Agent.syncWeb', () => provider.syncWeb());
   command('m365Agent.refreshModels', () => provider.refreshModels());
+  command('m365Agent.mcpTools', () => provider.mcpBridge.select());
   context.subscriptions.push({
     dispose: () => {
       provider.dispose().catch(() => {});
     },
   });
-  return { provider };
+  return { provider, modelProvider };
 }
 module.exports = { activate };

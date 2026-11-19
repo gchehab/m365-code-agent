@@ -8,7 +8,7 @@ const { digest } = require('../src/workspace');
 async function run() {
   const extension = vscode.extensions.getExtension('jhoon-dev.m365-code-agent');
   assert.ok(extension, 'extension is loaded');
-  const { provider } = await extension.activate();
+  const { provider, modelProvider } = await extension.activate();
   assert.ok(extension.packageJSON.contributes.viewsContainers.secondarySidebar.some(container => container.id === 'm365Agent'));
   assert.equal(extension.packageJSON.contributes.viewsContainers.activitybar, undefined);
   assert.ok((await vscode.commands.getCommands(true)).includes('workbench.view.extension.m365Agent.resetViewContainerLocation'));
@@ -28,6 +28,7 @@ async function run() {
   assert.equal(provider.responsePanel.panel, responsePanel, 'reader reuses the editor tab');
   provider.responsePanel.dispose();
   const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  await require('./model-provider.integration')(vscode, modelProvider);
   // Diagnose launch/storage failure without launching again or requiring a company login.
   const connectionOriginalContext = provider.context, connectionOriginalOutput = provider.output, connectionOriginalPost = provider.post;
   const connectionEvents = [], connectionLog = []; let launchAttempts = 0;
@@ -60,6 +61,137 @@ async function run() {
   assert.equal(provider.workspaceInfo.writable, true);
   assert.ok(provider.workspaceInfo.read > 0);
   assert.equal((await fs.readdir(root)).some(name => name.startsWith('.m365-agent-check-')), false);
+  // Exercise native editor commands and code-action discovery in the real host.
+  const menuPath = path.join(root, 'src', 'menu-target.js');
+  const menuSource = 'const value = unknownName;\n';
+  await fs.writeFile(menuPath, menuSource);
+  const menuDocument = await vscode.workspace.openTextDocument(menuPath);
+  const menuEditor = await vscode.window.showTextDocument(menuDocument);
+  menuEditor.selection = new vscode.Selection(0, 6, 0, 11);
+  let menuRequests = 0;
+  provider.browser = {
+    async connect() { await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, 'src', 'average.js'))); },
+    async stop() {}, async close() {},
+    async request(prompt) {
+      menuRequests++;
+      const data = JSON.parse(prompt.split('DATA: ')[1]);
+      assert.equal(data.mode, 'ask');
+      assert.equal(data.context.length, 1);
+      assert.equal(data.context[0].path, 'src/menu-target.js');
+      assert.equal(data.context[0].content, 'value');
+      assert.equal(data.context[0].range.startColumn, 7);
+      assert.deepEqual(data.files.scope, ['src/menu-target.js']);
+      assert.equal(provider.executionPolicy.autoApprove, false);
+      assert.equal(provider.executionPolicy.review, true);
+      return { kind: 'done', message: '선택 코드 설명 검증' };
+    },
+  };
+  await vscode.commands.executeCommand('m365Agent.explainSelection');
+  assert.equal(menuRequests, 1, 'selection survives focus switching while connecting');
+  assert.equal(await fs.readFile(menuPath, 'utf8'), menuSource);
+  const diagnosticCollection = vscode.languages.createDiagnosticCollection('m365-agent-editor-test');
+  try {
+    const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 14, 0, 25), 'Cannot find unknownName', vscode.DiagnosticSeverity.Error);
+    diagnostic.source = 'm365-agent-test'; diagnostic.code = 'test-unknown';
+    diagnosticCollection.set(menuDocument.uri, [diagnostic]);
+    let fix;
+    // The renderer's diagnostic markers arrive asynchronously from the collection.
+    for (let tries = 0; !fix && tries < 50; tries++) {
+      const actions = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', menuDocument.uri,
+        diagnostic.range, 'quickfix.m365Agent');
+      fix = actions.find(action => action.command?.command === 'm365Agent.fixDiagnostic');
+      if (!fix) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.ok(fix, 'native lightbulb exposes the M365 Agent fix');
+    assert.equal(fix.edit, undefined);
+    assert.notEqual(fix.isPreferred, true);
+    let fixRound = 0;
+    provider.browser.connect = async () => {};
+    provider.browser.request = async prompt => {
+      const data = JSON.parse(prompt.split('DATA: ')[1]);
+      assert.equal(data.mode, 'agent');
+      assert.equal(data.context[0].diagnostics[0].message, diagnostic.message);
+      assert.equal(provider.agent.autoApprove, false);
+      if (++fixRound === 1) return { kind: 'tools', calls: [{ name: 'read_file', path: 'src/menu-target.js' }] };
+      if (fixRound === 2) return { kind: 'changes', summary: '선언되지 않은 이름 수정', files: [{
+        path: 'src/menu-target.js', action: 'edit', baseHash: digest(menuSource),
+        edits: [{ oldText: 'unknownName', newText: '1' }],
+      }] };
+      return { kind: 'done', message: '빠른 수정 검증' };
+    };
+    const fixJob = vscode.commands.executeCommand(fix.command.command, ...fix.command.arguments);
+    try {
+      for (let tries = 0; !provider.pending && tries < 1000; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(provider.pending?.kind, 'changes');
+      assert.equal(provider.pending.viewData.review, true);
+      assert.equal(await fs.readFile(menuPath, 'utf8'), menuSource, 'quick fix waits for review');
+      await provider.handle({ type: 'apply', token: provider.pending.viewData.token });
+      await fixJob;
+    } finally {
+      if (provider.pending) await provider.stop();
+      await fixJob;
+    }
+    assert.equal(fixRound, 3);
+    assert.equal(await fs.readFile(menuPath, 'utf8'), 'const value = 1;\n');
+    await assert.rejects(provider.editorActions.fixDiagnostic(fix.command.arguments[0]), /변경/);
+    await provider.undo();
+  } finally { diagnosticCollection.dispose(); }
+
+  // Cross-extension lm.tools/invokeTool uses the same public path as MCP tools.
+  // The fixture has no network or filesystem side effects and is never packaged.
+  const mcpFixture = vscode.extensions.getExtension('m365-agent-test.mcp-tool-fixture');
+  assert.ok(mcpFixture, 'tool fixture development extension is loaded');
+  const nativeMcp = await mcpFixture.activate();
+  let lookup;
+  for (let tries = 0; !lookup && tries < 500; tries++) {
+    lookup = provider.mcpBridge.available().find(tool => tool.name === 'm365_agent_mcp_fixture_lookup');
+    if (!lookup) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(lookup, 'native LM tool catalogue exposes MCP-tagged lookup');
+  const priorMcpSelection = provider.context.workspaceState.get('mcp.lookupTools', []);
+  const mcpPath = path.join(root, 'mcp-lookup.txt');
+  let mcpJob;
+  try {
+    await provider.context.workspaceState.update('mcp.lookupTools', [{ name: lookup.name, fingerprint: lookup.fingerprint }]);
+    let mcpRound = 0;
+    const beforeCalls = nativeMcp.calls.length;
+    provider.browser = { async connect() {}, async stop() {}, async close() {}, async request(prompt) {
+      const data = JSON.parse(prompt.split('DATA: ')[1]);
+      assert.equal(provider.executionPolicy.mcpRequiresApproval, true);
+      if (++mcpRound === 1) return { kind: 'tools', calls: [{ name: 'mcp_list_tools' }] };
+      if (mcpRound === 2) return { kind: 'tools', calls: [{ name: 'mcp_tool_info', tool: lookup.name }] };
+      if (mcpRound === 3) return { kind: 'tools', calls: [{ name: 'mcp_call', tool: lookup.name, input: { query: 'approval flow' } }] };
+      if (mcpRound === 4) {
+        assert.match(data.history.at(-1).observations[0].result.output, /fixture documentation: approval flow/);
+        return { kind: 'changes', summary: '조회 결과 저장', files: [{ path: 'mcp-lookup.txt', action: 'create', baseHash: null, content: 'Reviewed MCP lookup result\n' }] };
+      }
+      return { kind: 'done', message: 'MCP 조회와 별도 파일 변경 검토 완료' };
+    } };
+    let settled = false;
+    mcpJob = provider.start({ task: '/agent MCP 문서를 조회하고 결과를 파일로 저장해줘.', review: true, includeEditor: false });
+    mcpJob.then(() => { settled = true; }, () => { settled = true; });
+    for (let tries = 0; !provider.pending && !settled && tries < 1000; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(provider.pending?.viewData.approvalKind, 'mcp', 'MCP arguments need their own approval');
+    assert.equal(nativeMcp.calls.length, beforeCalls);
+    await provider.handle({ type: 'approveCommand', token: 'stale-mcp-token' });
+    assert.equal(nativeMcp.calls.length, beforeCalls);
+    await provider.handle({ type: 'approveCommand', token: provider.pending.viewData.token });
+    for (let tries = 0; !provider.pending && !settled && tries < 1000; tries++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(provider.pending?.kind, 'changes', 'file writes remain behind the ordinary diff review');
+    assert.equal(provider.pending.viewData.review, true);
+    assert.equal(nativeMcp.calls.length, beforeCalls + 1);
+    await assert.rejects(fs.access(mcpPath));
+    await provider.handle({ type: 'apply', token: provider.pending.viewData.token });
+    await mcpJob;
+    assert.equal((await fs.readFile(mcpPath, 'utf8')).replace(/\r\n/g, '\n'), 'Reviewed MCP lookup result\n');
+    assert.equal(provider.mcpBridge.active, undefined);
+    await provider.undo();
+  } finally {
+    if (provider.pending || provider.agent?.running) await provider.stop();
+    await mcpJob;
+    await provider.context.workspaceState.update('mcp.lookupTools', priorMcpSelection);
+  }
+
   let round = 0;
   const updated = 'exports.average = values => values.length ? values.reduce((a,b)=>a+b,0)/values.length : null;\n';
   provider.browser = {
@@ -449,6 +581,16 @@ document.querySelector('#answer').textContent='JSON\\n복사\\n'+JSON.stringify(
     assert.match(await fs.readFile(path.join(root, 'samples/add.js'), 'utf8'), /exports.add/);
   } finally { provider.conversations.vscode = historyApi; }
   const report = { ok: true, checks: ['extension activation', 'offline browser launch/profile diagnostics without relaunch', 'sidebar webview', 'secondary-sidebar default and saved-location recovery', 'wide read-only response editor', 'local workspace read/write probe without M365', 'file read', 'existing-file modification', 'nested new-file creation', 'save to disk', 'command approval and rejection', 'changed-file command review', 'forced execution-config review', 'explicit automatic file/command approval and policy isolation', 'unlimited requests keep execution-config review and JSON-safe progress', 'delete approval/rejection, binary/UTF-16/empty restoration, mixed edits, collision and dirty-file guards', 'nested/empty-folder deletion, byte restoration, dirty/changed/recreated guards and new-file resource-event race', 'large-file partial edit', 'real generated test execution', 'checkpoint undo', 'persistent conversation', 'dirty-file protection', 'Edge launch/input inside VS Code extension host', 'automatic rendered-widget response collection inside VS Code', 'automatic source inspection -> browser tool arguments -> real edit over 128KB'], version: vscode.version };
+  report.checks.push('native editor selection and diagnostic quickfix review', 'native lm.tools/invokeTool MCP lookup, argument approval and separate file diff review');
+  report.checks.push('opt-in model provider native registration, discovery and typed tool call/result round-trip');
   await fs.writeFile(path.join(root, 'vscode-test-result.json'), JSON.stringify(report, null, 2));
 }
-module.exports = { run };
+module.exports = { async run() {
+  try { await run(); }
+  catch (error) {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (root) await fs.writeFile(path.join(root, 'vscode-test-failure.json'), JSON.stringify({ message: error.message, stack: error.stack }, null, 2));
+    console.error(error.stack || error);
+    throw error;
+  }
+} };

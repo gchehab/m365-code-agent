@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const ignore = require('ignore');
+const { ProjectIndex, generatedPath } = require('./search');
 /** @typedef {import('../types/contracts').ChangeProposal} ChangeProposal */
 /** @typedef {import('../types/contracts').PreparedChange} PreparedChange */
 /** @typedef {import('../types/contracts').DirectorySnapshot} DirectorySnapshot */
@@ -27,6 +28,23 @@ function decodeText(buffer) {
 const blocked =
   /(^|\/)(\.git|node_modules|\.venv|venv|\.ssh|\.aws|\.azure|\.kube|\.m365-agent)(\/|$)|(^|\/)\.env[^/]*$|\.(pem|key|pfx|p12|jks|keystore)$|(^|\/)(\.npmrc|\.pypirc|\.netrc|\.yarnrc\.ya?ml|id_rsa|id_dsa|id_ecdsa|id_ed25519|credentials(?:\.(json|ini|toml|ya?ml))?|appsettings(?:\.[^/]*)?\.json)$|\.tfstate(?:\.[^/]*)?$|(^|\/)\.docker\/config\.json$/i;
 
+/** @param {string} directory @param {string[]} names */
+async function readIgnores(directory, names) {
+  const rules = ignore();
+  for (const name of names) {
+    try {
+      const target = path.join(directory, name);
+      const stat = await fs.lstat(target);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024)
+        throw new Error('제외 규칙 파일을 안전하게 읽을 수 없습니다.');
+      rules.add(await fs.readFile(target, 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  return rules;
+}
+
 class WorkspaceStore {
   /** @param {string} root @param {((target: string) => Promise<string | undefined>) | undefined} [readText] */
   constructor(root, readText, { maxFileBytes = 16 * 1024 * 1024 } = {}) {
@@ -41,18 +59,141 @@ class WorkspaceStore {
     /** @type {Map<string, string>} */
     this.directoryReads = new Map();
     this.ignores = ignore();
+    /** @type {ProjectIndex | null} */
+    this.codeIndex = null;
     this.maxFileBytes = maxFileBytes;
   }
   async initialize() {
     this.root = await fs.realpath(this.root);
-    for (const name of ['.gitignore', '.m365agentignore']) {
+    this.ignores = await readIgnores(this.root, ['.gitignore', '.m365agentignore']);
+    return this;
+  }
+  /** Search inventory is separate from the bounded model-facing list_files tool.
+   * @param {import('../types/contracts').DiscoveryOptions} [options]
+   * @returns {Promise<import('../types/contracts').FileDiscovery>}
+   */
+  async discoverFiles({ paths, limit = 20000, maxDirectories = 10000, cancelled = () => false } = {}) {
+    if (
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 20000 ||
+      !Number.isInteger(maxDirectories) ||
+      maxDirectories < 1 ||
+      maxDirectories > 10000
+    )
+      throw new Error('검색 탐색 한도가 올바르지 않습니다.');
+    if (cancelled()) throw new Error('작업을 중지했습니다.');
+    this.ignores = await readIgnores(this.root, ['.gitignore', '.m365agentignore']);
+    const scopes = paths === undefined ? ['.'] : typeof paths === 'string' ? [paths] : paths;
+    if (!Array.isArray(scopes) || scopes.length > 500 || scopes.some((scope) => typeof scope !== 'string'))
+      throw new Error('검색 범위는 최대 500개의 상대 경로여야 합니다.');
+    const files = new Set(),
+      directories = new Set(),
+      visited = new Set(),
+      reasons = new Set();
+    /** @type {{path: string, rules: {prefix: string, rules: ReturnType<typeof ignore>}[]}[]} */
+    const queue = [];
+    const check = () => {
+      if (cancelled()) throw new Error('작업을 중지했습니다.');
+    };
+    // Include ignore rules from every ancestor even for a directly scoped search.
+    /** @param {string} directory */
+    const ancestorRules = async (directory) => {
+      const rules = [];
+      const parts = directory.split('/').filter(Boolean);
+      for (let i = 1; i <= parts.length; i++) {
+        const prefix = parts.slice(0, i).join('/');
+        const resolved = await this.resolve(prefix);
+        rules.push({ prefix: prefix + '/', rules: await readIgnores(resolved.target, ['.gitignore']) });
+      }
+      return rules;
+    };
+    for (const scope of scopes) {
+      check();
+      if (scope === '.' || scope === './') {
+        queue.push({ path: '', rules: [] });
+        continue;
+      }
+      const resolved = await this.resolve(scope);
+      const directory = (await fs.stat(resolved.target)).isDirectory();
+      const parent = path.posix.dirname(resolved.normalized);
+      const rules = await ancestorRules(parent === '.' ? '' : parent);
+      if (
+        rules.some((rule) =>
+          rule.rules.ignores(resolved.normalized.slice(rule.prefix.length) + (directory ? '/' : '')),
+        )
+      )
+        continue;
+      if (generatedPath(resolved.normalized)) {
+        reasons.add('generated-path');
+        continue;
+      }
+      if (directory) queue.push({ path: resolved.normalized, rules });
+      else files.add(resolved.normalized);
+    }
+    let entries = 0;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      check();
+      if (files.size >= limit || visited.size >= maxDirectories || entries >= 100000) {
+        reasons.add('inventory-limit');
+        break;
+      }
+      const current = queue[cursor];
+      if (visited.has(current.path)) continue;
+      visited.add(current.path);
       try {
-        this.ignores.add(await fs.readFile(path.join(this.root, name), 'utf8'));
+        const target = current.path ? (await this.resolve(current.path)).target : this.root;
+        const rules = current.path
+          ? [
+              ...current.rules,
+              { prefix: current.path + '/', rules: await readIgnores(target, ['.gitignore']) },
+            ]
+          : current.rules;
+        const directory = await fs.opendir(target);
+        for await (const entry of directory) {
+          check();
+          if (++entries > 100000 || files.size >= limit) {
+            reasons.add('inventory-limit');
+            break;
+          }
+          const relative = current.path ? current.path + '/' + entry.name : entry.name;
+          const scoped = relative + (entry.isDirectory() ? '/' : '');
+          if (
+            entry.isSymbolicLink() ||
+            blocked.test(relative) ||
+            generatedPath(relative) ||
+            this.ignores.ignores(scoped) ||
+            rules.some((rule) => rule.rules.ignores(scoped.slice(rule.prefix.length)))
+          )
+            continue;
+          if (entry.isDirectory()) {
+            if (!current.path) directories.add(relative);
+            queue.push({ path: relative, rules });
+          } else if (entry.isFile()) files.add(relative);
+        }
       } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
+        check();
+        reasons.add('unreadable-directory');
       }
     }
-    return this;
+    return {
+      files: [...files].slice(0, limit),
+      directories: [...directories].sort().slice(0, 100),
+      truncated: reasons.size > 0 || files.size > limit || directories.size > 100,
+      reasons: [...reasons],
+    };
+  }
+  /** @param {string} query @param {string | string[]} [paths]
+   * @param {() => boolean} [cancelled] @param {import('../types/contracts').FileDiscovery} [listing] */
+  async searchCode(query, paths, cancelled = () => false, listing) {
+    if (typeof query !== 'string' || !query.trim() || query.length > 8000)
+      throw new Error('관련 코드 검색어는 1~8,000자여야 합니다.');
+    this.codeIndex ||= new ProjectIndex(this);
+    return this.codeIndex.search(
+      query,
+      listing || (await this.discoverFiles({ paths, cancelled })),
+      cancelled,
+    );
   }
   /** @param {string} input */
   normalize(input) {
@@ -353,42 +494,63 @@ class WorkspaceStore {
     return result;
   }
   /** @param {string} query @param {string | string[]} [paths] */
-  async search(query, paths) {
+  async search(query, paths, cancelled = () => false) {
     if (typeof query !== 'string' || !query || query.length > 200)
       throw new Error('검색어는 1~200자여야 합니다.');
-    let files;
-    if (paths) {
-      const scopes = typeof paths === 'string' ? [paths] : paths;
-      if (!Array.isArray(scopes) || scopes.length > 500) throw new Error('검색 범위는 최대 500개입니다.');
-      const candidates = new Set();
-      for (const scope of scopes) {
-        if (scope === '.' || scope === './') {
-          for (const file of (await this.listFiles(500)).files) candidates.add(file);
-          continue;
-        }
-        const resolved = await this.resolve(scope);
-        if ((await fs.stat(resolved.target)).isDirectory())
-          for (const file of (await this.listFiles(500, scope)).files) candidates.add(file);
-        else candidates.add(resolved.normalized);
-        if (candidates.size >= 500) break;
-      }
-      files = [...candidates].slice(0, 500);
-    } else files = (await this.listFiles(500)).files;
+    const listing = await this.discoverFiles({ paths, cancelled });
     const matches = [];
-    for (const filename of files) {
+    const reasons = new Set(listing.reasons);
+    let searchedFiles = 0,
+      skippedFiles = 0,
+      bytes = 0;
+    for (const filename of listing.files) {
+      if (cancelled()) throw new Error('작업을 중지했습니다.');
       let file;
       try {
+        const { target } = await this.resolve(filename);
+        const stat = await fs.stat(target);
+        if (bytes + stat.size > 64 * 1024 * 1024) {
+          skippedFiles++;
+          reasons.add('search-byte-limit');
+          continue;
+        }
+        bytes += stat.size;
         file = await this.loadFile(filename, true);
       } catch {
+        skippedFiles++;
+        reasons.add('unreadable-file');
         continue;
       }
+      searchedFiles++;
       for (const [index, line] of file.content.split(/\r?\n/).entries()) {
-        if (line.toLowerCase().includes(query.toLowerCase()))
-          matches.push({ path: file.path, line: index + 1, text: line.slice(0, 400) });
-        if (matches.length >= 40) return { matches, truncated: true };
+        if (cancelled()) throw new Error('작업을 중지했습니다.');
+        const found = line.toLowerCase().indexOf(query.toLowerCase());
+        if (found >= 0) {
+          const start = Math.max(0, found - 80);
+          matches.push({
+            path: file.path,
+            line: index + 1,
+            column: start + 1,
+            text: line.slice(start, start + 400),
+          });
+        }
+        if (matches.length >= 40)
+          return {
+            matches,
+            truncated: true,
+            searchedFiles,
+            skippedFiles,
+            reasons: [...reasons, 'result-limit'],
+          };
       }
     }
-    return { matches, truncated: false };
+    return {
+      matches,
+      truncated: listing.truncated || skippedFiles > 0,
+      searchedFiles,
+      skippedFiles,
+      reasons: [...reasons],
+    };
   }
   /** @param {ChangeProposal[]} files @returns {Promise<PreparedChange[]>} */
   async prepareChanges(files, cancelled = () => false) {

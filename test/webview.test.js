@@ -17,6 +17,8 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   const vscode = {
     window: { createOutputChannel: () => ({ appendLine: noop, dispose: noop }), registerWebviewViewProvider: (_id, value) => { provider = value; } },
     workspace: { registerTextDocumentContentProvider: noop }, commands: { registerCommand: noop },
+    languages: { registerCodeActionsProvider: noop },
+    CodeActionKind: { QuickFix: { append: value => `quickfix.${value}` } },
     Uri: { joinPath: (base, ...parts) => ({ fsPath: path.join(base.fsPath, ...parts) }) }
   };
   const sandbox = { require: name => name === 'vscode' ? vscode : localRequire(name), module: { exports: {} } };
@@ -129,6 +131,39 @@ test('chat UI handles submission, Korean IME, progress, approvals and narrow lay
   await page.locator('.session-open').first().click();
   assert.equal(await page.locator('#historyPanel').isVisible(), false);
   assert.equal((await page.evaluate(() => window.sent.find(message => message.type === 'openSession'))).id, 'one');
+
+  // Editor actions use review even when the next chat request prefers auto-approval.
+  await page.locator('#composerOptions').evaluate(element => { element.open = true; });
+  await page.locator('#autoApprove').check();
+  await page.locator('#unlimitedRounds').check();
+  await input.fill('작성 중인 다음 요청');
+  await host({ type: 'busy', policy: { autoApprove: false, review: true, unlimitedRounds: false } });
+  assert.equal(await page.locator('#approvalMode').textContent(), '승인 켜짐');
+  assert.equal(await page.locator('#roundMode').isVisible(), false);
+  assert.equal(await page.locator('#autoApprove').isChecked(), true);
+  assert.equal(await input.inputValue(), '작성 중인 다음 요청');
+  await host({ type: 'history', sessionId: 'editor-action', events: [], attachments: [], running: true,
+    executionPolicy: { autoApprove: false, review: true, unlimitedRounds: false } });
+  assert.equal(await page.locator('#approvalMode').textContent(), '승인 켜짐');
+  await host({ type: 'idle' });
+  assert.equal(await page.locator('#approvalMode').textContent(), '승인 없이 진행');
+  assert.equal(await page.locator('#roundMode').isVisible(), true);
+  assert.equal(await input.inputValue(), '작성 중인 다음 요청');
+
+  await host({ type: 'busy', policy: { autoApprove: true, review: false, mcpRequiresApproval: true } });
+  assert.equal(await page.locator('#approvalMode').textContent(), '로컬 자동 승인 · MCP 매번 승인');
+  const mcpInput = JSON.stringify({ query: '<script>not executed</script>' }, null, 2);
+  await host({ type: 'commandApproval', approvalKind: 'mcp', tool: 'mcp_docs_search', root: 'C:/project', command: mcpInput,
+    changedFiles: [], token: 'mcp-review-token' });
+  assert.equal(await page.locator('#approvalTitle').textContent(), 'MCP 도구 실행 승인');
+  assert.equal(await page.locator('#commandText').textContent(), mcpInput);
+  assert.equal(await page.locator('#commandText script').count(), 0);
+  await page.locator('#approveCommand').click();
+  assert.equal((await page.evaluate(() => window.sent.findLast(message => message.type === 'approveCommand'))).token, 'mcp-review-token');
+  await host({ type: 'commandApproval', command: 'npm test', root: 'C:/project', changedFiles: [], token: 'normal-review-token' });
+  assert.equal(await page.locator('#approvalTitle').textContent(), '명령 실행 승인');
+  assert.equal(await page.locator('#approvalNote').isVisible(), false);
+  await host({ type: 'idle' });
 
   // Exercise the host's actual conversation mapping without calling a model or file tool.
   view.webview.postMessage = noop;

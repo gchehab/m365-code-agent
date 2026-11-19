@@ -3,6 +3,8 @@ import type { ChangeProposal, PreparedChange, ToolCall } from '../types/contract
 import type { DirectoryBackup } from '../types/contracts';
 import { ChangeController } from '../src/changes';
 import { CodingAgent } from '../src/agent';
+import { ExperimentalModelProvider } from '../src/model-provider';
+import type * as vscode from 'vscode';
 import type { WorkspaceStore } from '../src/workspace';
 
 const call: ToolCall = normalizeToolCall({ name: 'read_file', path: 'main.js' });
@@ -46,3 +48,9 @@ function checkExecution(
   });
 }
 void checkExecution;
+
+function checkModelProvider(provider: ExperimentalModelProvider) {
+  const native: vscode.LanguageModelChatProvider = provider;
+  return native;
+}
+void checkModelProvider;

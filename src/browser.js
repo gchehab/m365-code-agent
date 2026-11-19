@@ -458,7 +458,8 @@ class CopilotBrowser {
       '새 대화 버튼을 찾지 못했습니다. 전용 브라우저에서 새 채팅을 선택하세요. 기존 대화에서 작업을 계속하는 것도 가능합니다.',
     );
   }
-  async request(prompt, id, onStatus = () => {}) {
+  async request(prompt, id, onStatus = () => {}, protocol = { parseReply, mergeReplies, replyIdentity }) {
+    const { parseReply, mergeReplies, replyIdentity } = protocol;
     if (this.busy) throw new Error('이미 Copilot 응답을 기다리는 중입니다.');
     this.busy = true;
     this.cancelled = false;

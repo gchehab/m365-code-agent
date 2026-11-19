@@ -4,6 +4,7 @@ const el = (id) => document.getElementById(id);
 const send = (type) => api.postMessage({ type });
 const saved = api.getState() || {};
 let running = false;
+let activePolicy = null;
 let composing = false;
 let reviewToken, commandToken;
 let pendingTask = saved.pendingTask || null;
@@ -47,14 +48,17 @@ el('autoApprove').checked = saved.autoApprove === true;
 el('unlimitedRounds').checked = saved.unlimitedRounds === true;
 el('includeEditor').checked = saved.includeEditor !== false;
 function syncPreferences() {
-  const automatic = el('autoApprove').checked;
-  el('roundMode').hidden = !el('unlimitedRounds').checked;
+  const automatic = activePolicy?.autoApprove ?? el('autoApprove').checked;
+  const review = activePolicy?.review ?? el('review').checked;
+  el('roundMode').hidden = !(activePolicy?.unlimitedRounds ?? el('unlimitedRounds').checked);
   el('approvalMode').textContent = automatic
-    ? '승인 없이 진행'
-    : el('review').checked
+    ? activePolicy?.mcpRequiresApproval
+      ? '로컬 자동 승인 · MCP 매번 승인'
+      : '승인 없이 진행'
+    : review
       ? '승인 켜짐'
       : '일반 파일 자동 적용';
-  el('approvalMode').classList.toggle('auto-apply', automatic || !el('review').checked);
+  el('approvalMode').classList.toggle('auto-apply', automatic || !review);
   el('review').disabled = running || automatic;
   el('form').classList.toggle('auto-approval', automatic);
 }
@@ -73,8 +77,9 @@ function persist() {
     composerOptions: el('composerOptions').open,
   });
 }
-function busy(value) {
+function busy(value, policy) {
   running = value;
+  activePolicy = value ? policy || activePolicy : null;
   if (!value) progress(null);
   for (const id of [
     'run',
@@ -95,6 +100,7 @@ function busy(value) {
     'unlimitedRounds',
     'includeEditor',
     'checkWorkspace',
+    'mcpTools',
   ])
     el(id).disabled = value;
   for (const control of el('historyPanel').querySelectorAll('button,input')) control.disabled = value;
@@ -289,6 +295,7 @@ for (const id of [
   'approveCommand',
   'rejectCommand',
   'checkWorkspace',
+  'mcpTools',
   'refreshModels',
   'syncWeb',
   'showBrowser',
@@ -421,7 +428,7 @@ window.addEventListener('message', ({ data }) => {
     el('status').textContent = data.text;
     el('status').classList.toggle('error', Boolean(data.error));
   }
-  if (data.type === 'busy') busy(true);
+  if (data.type === 'busy') busy(true, data.policy);
   if (data.type === 'idle') {
     busy(false);
     closeReview();
@@ -483,7 +490,7 @@ window.addEventListener('message', ({ data }) => {
     followTail = same ? wasFollowing : true;
     if (!followTail) el('messages').scrollTop = oldTop;
     followEnd();
-    busy(data.running);
+    busy(data.running, data.executionPolicy);
     attachments(data.attachments || []);
     el('changes').hidden = true;
     el('approval').hidden = true;
@@ -533,11 +540,20 @@ window.addEventListener('message', ({ data }) => {
   }
   if (data.type === 'reviewClosed') closeReview();
   if (data.type === 'commandApproval') {
+    const mcp = data.approvalKind === 'mcp';
+    el('approvalTitle').textContent = mcp ? 'MCP 도구 실행 승인' : '명령 실행 승인';
+    el('approveCommand').textContent = mcp ? '이번 도구 실행' : '이번 명령 실행';
+    el('approvalNote').hidden = !mcp;
+    el('approvalNote').textContent = mcp
+      ? '선택한 도구의 인자를 MCP 서버에 전송합니다. 서버가 직접 만든 변경은 이 확장의 diff·되돌리기 대상이 아니므로 조회 전용 서버만 사용하세요.'
+      : '';
     commandToken = data.token;
     el('approval').hidden = false;
     el('commandText').textContent = data.command;
-    el('commandRoot').textContent = `작업 폴더: ${data.root}`;
-    el('status').textContent = '명령 실행 승인 대기 중';
+    el('commandRoot').textContent = mcp
+      ? `도구: ${data.tool} · 프로젝트: ${data.root}`
+      : `작업 폴더: ${data.root}`;
+    el('status').textContent = mcp ? 'MCP 도구 실행 승인 대기 중' : '명령 실행 승인 대기 중';
     el('commandChanges').replaceChildren();
     if (data.changedFiles?.length) {
       for (const currentTask of [true, false]) {

@@ -22,7 +22,10 @@ const { runTests } = require('@vscode/test-electron');
     result = await runTests({
       vscodeExecutablePath: process.env.M365_AGENT_VSCODE_PATH || undefined,
       cachePath: path.join(output, 'vscode-cache'),
-      extensionDevelopmentPath: process.env.M365_AGENT_EXTENSION_PATH || root,
+      extensionDevelopmentPath: [
+        process.env.M365_AGENT_EXTENSION_PATH || root,
+        path.join(root, 'test', 'fixtures', 'mcp-extension'),
+      ],
       extensionTestsPath: path.join(root, 'test', 'vscode.integration.js'),
       stdout: log,
       stderr: log,

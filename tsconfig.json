@@ -17,6 +17,8 @@
     "src/tool-call.js",
     "src/changes.js",
     "src/agent.js",
+    "src/editor-actions.js",
+    "src/mcp.js",
     "test/contracts.typecheck.ts"
   ]
 }

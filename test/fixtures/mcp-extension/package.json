@@ -1,0 +1,21 @@
+{
+  "name": "mcp-tool-fixture",
+  "publisher": "m365-agent-test",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.106.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "languageModelTools": [{
+      "name": "m365_agent_mcp_fixture_lookup",
+      "displayName": "MCP fixture lookup",
+      "modelDescription": "Read-only deterministic test documentation lookup.",
+      "tags": ["mcp"],
+      "inputSchema": {
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"]
+      }
+    }]
+  }
+}

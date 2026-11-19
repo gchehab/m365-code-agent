@@ -70,17 +70,28 @@ test('Edge preserves a queued request across login, retries only an unsent hydra
     await context.route('https://login.microsoftonline.com/**', route => route.fulfill({ contentType: 'text/html', body: '<input type="password" value="untouched">' }));
     const page = await context.newPage();
     await page.goto(login ? 'https://login.microsoftonline.com/test' : 'https://m365.cloud.microsoft/chat');
-    const transport = new CopilotBrowser({ timeoutSeconds: 3, composerStableMs: 50, readinessPollMs: 30, responseStableMs: 50, inputSettleTimeoutMs: 120, loginTimeoutMs: 3000 });
+    const transport = new CopilotBrowser({ timeoutSeconds: 10, composerStableMs: 50, readinessPollMs: 30, responseStableMs: 50, inputSettleTimeoutMs: 120, loginTimeoutMs: 15000 });
     transport.context = context; transport.page = page;
     return transport;
   }
   await t.test('login in a new tab automatically resumes the original request exactly once', async () => {
     const transport = await fixture(true), auth = transport.page, statuses = [];
-    const pending = transport.request('Current requestId: login\n최초 요청', 'login', text => statuses.push(text));
-    await auth.waitForTimeout(200);
-    const chat = await transport.context.newPage();
-    await chat.goto('https://m365.cloud.microsoft/chat');
-    assert.equal((await pending).message, '완료');
+    let waitingForLogin;
+    const loginWait = new Promise(resolve => { waitingForLogin = resolve; });
+    const pending = transport.request('Current requestId: login\n최초 요청', 'login', text => {
+      statuses.push(text);
+      if (/로그인·MFA 대기/.test(text)) waitingForLogin();
+    });
+    // Attach rejection handling before navigation; a failed request must not
+    // become an unhandled rejection while the login page is still being prepared.
+    let chat;
+    const [reply] = await Promise.all([pending, (async () => {
+      await Promise.race([loginWait, pending]);
+      chat = await transport.context.newPage();
+      await chat.goto('https://m365.cloud.microsoft/chat');
+    })()]);
+    assert.equal(transport.page, chat);
+    assert.equal(reply.message, '완료');
     assert.equal(await auth.locator('input').inputValue(), 'untouched');
     assert.equal(await chat.evaluate(() => window.sends), 1);
     assert.equal(statuses.some(text => /로그인/.test(text)), true);

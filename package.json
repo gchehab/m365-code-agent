@@ -2,7 +2,7 @@
   "name": "m365-code-agent",
   "displayName": "M365 Code Agent",
   "description": "Unofficial, experimental coding agent that uses your signed-in M365 Copilot through Edge to read, edit and delete files in a VS Code workspace.",
-  "version": "0.13.3",
+  "version": "0.14.0",
   "publisher": "jhoon-dev",
   "author": "jhoon-dev",
   "preview": true,
@@ -47,9 +47,16 @@
     }
   },
   "activationEvents": [
-    "onView:m365Agent.chat"
+    "onView:m365Agent.chat",
+    "onLanguageModelChatProvider:m365-code-agent"
   ],
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "m365-code-agent",
+        "displayName": "M365 Code Agent (Experimental)"
+      }
+    ],
     "commands": [
       {
         "command": "m365Agent.open",
@@ -90,8 +97,72 @@
       {
         "command": "m365Agent.editorBrowser",
         "title": "M365 Agent: VS Code 브라우저로 전환"
+      },
+      {
+        "command": "m365Agent.explainSelection",
+        "title": "선택 코드 설명",
+        "category": "M365 Agent",
+        "enablement": "isWorkspaceTrusted && resourceScheme == file && editorHasSelection"
+      },
+      {
+        "command": "m365Agent.reviewSelection",
+        "title": "선택 코드 리뷰",
+        "category": "M365 Agent",
+        "enablement": "isWorkspaceTrusted && resourceScheme == file && editorHasSelection"
+      },
+      {
+        "command": "m365Agent.editSelection",
+        "title": "선택 코드 수정…",
+        "category": "M365 Agent",
+        "enablement": "isWorkspaceTrusted && resourceScheme == file && editorHasSelection && !editorReadonly"
+      },
+      {
+        "command": "m365Agent.fixDiagnostic",
+        "title": "오류·경고 수정안 요청",
+        "category": "M365 Agent",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "m365Agent.mcpTools",
+        "title": "M365 Agent: 조회용 MCP 도구 선택",
+        "enablement": "isWorkspaceTrusted"
       }
     ],
+    "submenus": [
+      {
+        "id": "m365Agent.editorMenu",
+        "label": "M365 Agent"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "m365Agent.editorMenu",
+          "when": "isWorkspaceTrusted && resourceScheme == file && editorHasSelection",
+          "group": "2_m365Agent"
+        }
+      ],
+      "m365Agent.editorMenu": [
+        {
+          "command": "m365Agent.explainSelection",
+          "group": "1_read@1"
+        },
+        {
+          "command": "m365Agent.reviewSelection",
+          "group": "1_read@2"
+        },
+        {
+          "command": "m365Agent.editSelection",
+          "group": "2_edit@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "m365Agent.fixDiagnostic",
+          "when": "false"
+        }
+      ]
+    },
     "viewsContainers": {
       "secondarySidebar": [
         {
@@ -113,6 +184,20 @@
     "configuration": {
       "title": "M365 Code Agent",
       "properties": {
+        "m365Agent.experimental.modelProvider.maxPromptCharacters": {
+          "type": "number",
+          "default": 60000,
+          "minimum": 4000,
+          "maximum": 120000,
+          "scope": "application",
+          "description": "실험용 모델 제공자의 웹 요청 글자 한도. Webview의 한도와 별개입니다. 오래된 완결 교환을 생략할 수 있지만 System 지시·모든 사용자 요청·최근 도구 교환·도구 정의는 유지합니다. 웹 입력창의 실제 한도가 우선합니다."
+        },
+        "m365Agent.experimental.modelProvider.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "실험용 M365 Web 모델을 VS Code 모델 선택기에 제공합니다. 별도 전용 브라우저에서 다시 로그인해야 합니다. VS Code 도구에는 Webview의 해시 검증·수정 범위·되돌리기가 적용되지 않으며 VS Code 승인 정책을 따릅니다."
+        },
         "m365Agent.copilotUrl": {
           "type": "string",
           "default": "https://m365.cloud.microsoft/chat",
@@ -205,7 +290,7 @@
   },
   "scripts": {
     "prepackage": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\"",
-    "test": "node --test test/*.test.js",
+    "test": "node --test --test-concurrency=2 test/*.test.js",
     "test:integration": "node scripts/test-integration.cjs",
     "lint": "eslint src media/*.js scripts/*.cjs eslint.config.cjs",
     "check": "npm run lint && npm run format:check && npm run typecheck",

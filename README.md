@@ -1,187 +1,202 @@
 # M365 Code Agent
 
+[English](README.md) | [한국어](README.ko.md)
+
 **Experimental preview · Unofficial · Windows + Microsoft Edge**
 
-An independent VS Code coding agent that uses your signed-in Microsoft 365 Copilot web session through Playwright.
-It can read, search, create and edit files in your local workspace without a browser extension, clipboard relay or separate AI API key.
-This project is not affiliated with, endorsed by, or supported by Microsoft. You need an eligible Microsoft 365 Copilot account and permission to use browser automation in your organization.
+An independent VS Code coding agent that uses your signed-in Microsoft 365 Copilot web session through Playwright. Read, search, create, edit and delete workspace files without a browser extension, clipboard relay or separate AI API key.
 
-이 확장은 Microsoft가 제공하거나 보증하는 제품이 아닌 실험적 버전입니다. 특정 계정과 예제 프로젝트에서 실제 M365 Copilot 연동을 확인했으며, 조직별 로그인·웹 UI·보안 정책의 호환성을 보장하지 않습니다. 확인 범위는 아래 `실계정 확인 범위`에 기록합니다.
+This project is not affiliated with, endorsed by, or supported by Microsoft. You need an eligible Microsoft 365 Copilot account and permission to use browser automation in your organization. Successful tests with one account and example projects do not establish compatibility with every tenant, login flow or security policy.
 
-VS Code의 프로젝트를 읽고 수정하며, 로그인된 M365 Copilot 웹과 자동으로 대화하는 로컬 확장입니다.
-별도 Edge 확장, 클립보드 중계, Copilot Studio, 외부 AI API 키를 사용하지 않습니다.
+Version **0.14.0** keeps the existing M365 Agent chat and adds an optional VS Code model provider, editor actions, lookup-oriented MCP integration and ranked code search. See the [changelog](CHANGELOG.md).
 
-## 설치
+## Authentication and change protection
 
-1. [Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent)에서 설치하거나, `…` → `VSIX에서 설치…`에서 `m365-code-agent-0.13.3.vsix`를 선택합니다.
-2. 프로젝트 폴더를 열고 오른쪽 보조 사이드바의 M365 Agent를 엽니다. 명령 팔레트에서 `M365 Agent: 오른쪽에서 열기`로도 열 수 있습니다.
-3. 입력창 아래 `연결`을 누릅니다. VS Code 편집기 탭에 `M365 Copilot 브라우저`가 열립니다. PC에 설치된 Edge의 실제 자동화 페이지를 이 탭에서 보고 조작합니다.
-4. 이 브라우저 탭에서 **회사 계정 로그인과 MFA를 직접** 완료하고 Copilot 대화 화면으로 이동합니다. 마우스·스크롤·입력·한글 IME를 지원합니다. 네이티브 OS 인증 창이 필요한 경우 `외부 브라우저로 전환`을 사용하세요.
-5. VS Code에서 작업 요청을 입력하고 Enter 또는 `↑`를 누릅니다. Shift+Enter로 줄바꿈합니다. 이후 입력·전송·응답 수집은 자동입니다.
+- **No separate extraction or relay of access tokens or cookies.** Sign in and complete MFA yourself in a dedicated browser. Its profile retains the session.
+- **The extension does not open a separate localhost HTTP server.** It automates the web UI and does not call private Copilot APIs directly.
+- **The existing Webview file tools verify SHA-256 hashes and previously read ranges.** They provide change review and undo. Explicit automatic approval also skips execution-config review and command approval; shell changes are outside file-tool protection and undo.
 
-회사 PC에는 VS Code 1.106 이상과 Microsoft Edge가 필요합니다. Python 또는 별도 Node.js 설치는 필요하지 않습니다.
-기존 Edge의 기본 프로필이나 비밀번호를 가져오지 않습니다. 확장 전용 Edge 프로필에 로그인 상태를 보관하며 표시 모드를 전환해도 같은 프로필을 사용합니다.
-첫 로그인, 인증 만료, MFA와 CAPTCHA는 직접 처리해야 합니다.
+Code, conversation context and tool results needed for a task are sent to the signed-in M365 Copilot website. These design choices do not imply organizational approval or Microsoft support. Filename filters cannot identify every secret; configure sensitive paths in `.m365agentignore`.
 
-채팅은 오른쪽 보조 사이드바에 기본 배치합니다. 이전 버전 위치가 남아 있으면 명령 팔레트에서 `M365 Agent: 오른쪽에서 열기`를 실행하세요. 이 명령은 M365 Agent 보기와 컨테이너만 기본 위치로 복원합니다. 보조 사이드바 자체를 왼쪽으로 배치한 사용자 설정에서는 해당 사이드바 위치를 따릅니다.
+## Install and connect
 
-## VS Code 브라우저 표시
+1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent), or use **Extensions → … → Install from VSIX…** with `m365-code-agent-0.14.0.vsix` from a [GitHub release](https://github.com/jhoon-dev/m365-code-agent/releases).
+2. Open a local project and the **M365 Agent** view in the secondary sidebar. The command `M365 Agent: 오른쪽에서 열기` opens/restores this view.
+3. Click **연결** (Connect) below the input. The **M365 Copilot 브라우저** editor tab displays the actual automated Edge page.
+4. Complete your company login and MFA yourself, then open the Copilot chat page. Use **외부 브라우저로 전환** (Switch to external browser) if native authentication windows are needed.
+5. Enter a request in VS Code and press Enter or the send arrow. Shift+Enter inserts a newline. Subsequent submission and response collection are automatic.
 
-기본값인 `m365Agent.browserView=editor`는 실제 Edge 화면을 VS Code Webview에 표시하고 직접 입력을 같은 페이지로 전달합니다. 모델의 자동 입력·전송·응답 수집과 모델 메뉴 조작 중에는 직접 입력을 잠급니다. 로그인 준비를 기다리는 동안에는 직접 입력할 수 있습니다. 상단 드롭다운에서 로그인 팝업 등 같은 전용 브라우저의 탭을 선택할 수 있습니다.
+Requires Windows, VS Code 1.106+ and Microsoft Edge. No separate Python or Node.js installation is needed to run the extension, although your project's build/test commands need their own runtimes. Remote WSL/SSH/container workspaces are outside this release's scope. In a multi-root workspace, select one local project folder.
 
-`더 보기(⋯)` → `Copilot 브라우저 열기`로 화면을 다시 열 수 있습니다. 브라우저 편집기 탭을 닫아도 현재 자동화는 계속됩니다. 네이티브 비밀번호 관리자·인증서 선택·패스키 등 별도 OS/브라우저 창이 필요한 흐름은 보장하지 않으며, 패널의 `외부 브라우저로 전환`을 사용하세요. 전환은 진행 중인 작업을 중지합니다. 준비 중이던 요청은 입력창에 복구되므로 로그인 후 다시 보낼 수 있습니다. 영구적으로 외부 창을 사용하려면 설정을 `external`로 바꾸고 창을 다시 로드하세요.
+The extension does not import your normal Edge profile or passwords. The Webview uses its own persistent profile. Login expiry, MFA and CAPTCHA require your direct action. The extension UI and activity messages remain Korean; model answers default to your request's language and follow an explicit response-language instruction.
 
-이 화면은 iframe 또는 VS Code의 실험적 BrowserTab API가 아닙니다. 기존 Playwright 페이지의 화면을 메모리에서 전달합니다. 별도 로컬 HTTP 서버·쿠키/토큰 추출·화면 파일 저장·웹 보안 헤더 변경을 사용하지 않습니다. 패널이 숨겨지면 캡처를 멈추며, 주소 표시에는 인증 쿼리·조각을 포함하지 않습니다.
+## Experimental VS Code model provider
 
-## 답변 읽기
+**Optional and disabled by default.** This runs alongside the existing Webview and exposes **M365 Web (Experimental)** in the host's model picker. It uses the model currently selected on the website, without claiming a particular model identity or native context window.
 
-- 답변은 14px 본문과 넓은 줄 간격으로 표시합니다. 상단 `읽기 설정`에서 12~18px 크기와 코드 줄바꿈 기본값을 바꿀 수 있습니다. 설정은 이 VS Code 대화 화면에 보관합니다.
-- 코드마다 `줄바꿈`과 `복사`를 제공하며, 답변 아래 `답변 복사`는 원래 Markdown을 복사합니다. 실제 클립보드 처리 결과를 표시합니다.
-- `크게 보기`는 같은 답변을 읽기 전용 편집기 탭에서 넓게 엽니다. 프로젝트 파일을 생성하거나 변경하지 않습니다. 탭 하나를 재사용하며 자체 글자 크기·줄바꿈·복사를 지원합니다.
-- 도구 실행과 시스템 안내는 연속된 `작업 기록`으로 접어 모읍니다. 실패한 도구는 자동으로 펼쳐집니다. 변경 검토와 명령 승인 카드는 계속 별도로 표시합니다.
-- 위쪽 답변을 읽는 중에는 새 이벤트나 같은 웹 대화 동기화가 스크롤을 맨 아래로 옮기지 않습니다. `최신 응답`을 눌러 마지막으로 이동할 수 있습니다.
-- 입력창은 내용에 따라 늘어나며 모델·현재 파일·변경 승인 설정은 접어서 표시합니다. 접혀 있어도 변경 승인 여부를 표시합니다. 프로젝트 점검은 `더 보기(⋯)` 안에 있습니다.
+1. Enable the user-level setting `m365Agent.experimental.modelProvider.enabled`. Workspace settings cannot enable it.
+2. Copy the [compact Agent template](examples/m365-web.agent.md) to your project's `.github/agents/m365-web.agent.md`.
+3. In Copilot Chat, choose **M365 Web** as the Agent and **M365 Web (Experimental)** as the model under **M365 Code Agent (Experimental)**.
+4. On the first request, complete login/MFA in the provider's **separate dedicated external browser**. It does not copy the Webview profile or cookies.
+5. Start with a short question and the template's `read`/`edit` tools. Host Chat availability, account access, tools and organization policy still apply.
 
-## 사용
+The template requests file reading/editing without terminal commands or external services; it is not a security sandbox. The default Agent with all extension/MCP tools can exceed the host's System/tool context budget **before the provider is called**. Browser-side compaction cannot fix that preflight failure. Use a new Chat with a compact Agent or only the necessary tools. The `Local` and `Copilot` execution paths differ; changing the model does not switch the execution path.
 
-채팅 중심으로 작업하고, 파일 문맥을 첨부하고, 도구 실행과 변경을 검토하는 흐름입니다.
-GitHub Copilot·Codex·Claude Code의 일반적인 작업 방식을 참고한 독립 구현이며, 동일한 성능·기능 전체를 제공하는 제품은 아닙니다.
+| Path | Tool execution and approval | Change protection and undo |
+| --- | --- | --- |
+| Existing M365 Agent Webview | Extension file/command approval and lookup MCP policy | File-tool hashes, read ranges and undo; shell and remote-tool effects excluded |
+| Experimental model provider | Returns host tool calls to VS Code; the host/calling extension executes and approves them | Host/tool protections apply. **Webview hash/range validation and undo do not apply** |
 
-모드 선택 없이 같은 입력창에서 분석·계획·수정을 요청합니다. 알 수 없는 표현을 읽기 전용으로 막지 않습니다. 명확한 설명·검토·계획 질문에는 읽기 전용 보호를 적용하고 `/ask`, `/plan`, `/review`는 항상 읽기 전용입니다. 문장 판별은 완전한 의미 이해를 보장하지 않으며, 특정 단어만으로 파일 변경을 강제하지 않습니다. 기본값에서는 파일 변경과 명령 실행 승인을 유지하며, 사용자가 `승인 없이 진행`을 켠 요청은 해당 승인 단계를 생략합니다.
+### Limits and conversation handling
 
-- 처음 요청을 보낸 뒤 로그인 화면이 열려도 요청을 보관합니다. 로그인·MFA와 입력창 로딩이 끝나면 자동 전송합니다(기본 최대 10분 대기). 제출 전에 입력창이 초기화된 경우에만 다시 입력하며, 이미 누른 전송 버튼을 자동으로 다시 누르지 않습니다. 실패한 요청은 VS Code 입력창에 복구합니다. 그동안 새로 작성한 내용은 덮어쓰지 않습니다.
-- `모델 불러오기`로 현재 계정의 실제 웹 메뉴를 읽고 드롭다운에서 모델을 변경합니다. 웹에서 제공되지 않는 모델을 추가하거나 라이선스 제한을 우회하지 않습니다. 메뉴가 없거나 구조가 다르면 웹의 현재 모델로 작업할 수 있습니다.
-- 모델 답변과 수정 요약은 현재 사용자가 입력한 언어를 기본으로 하며, “영어로 답해줘”처럼 응답 언어를 명시하면 그 요청을 우선합니다. `/review`·`/test`도 원래 입력을 보존합니다. 확장 UI와 작업 기록 문구는 한국어입니다.
-- 답변의 제목·목록·표·코드 블록을 Markdown으로 표시하고 코드 복사 버튼을 제공합니다. 답변의 HTML과 외부 이미지는 실행·로드하지 않습니다.
+- Converts text, System/User/Assistant roles, tool schemas, call IDs and results. System instructions are preserved as roles and bridge instructions in JSON; this is not access to the website's native system channel. UTF-8 text/JSON/XML DataParts and documented text-only PromptTsx trees are supported. Images, binary data and opaque/unknown PromptTsx nodes are explicitly rejected.
+- Keeps a separate browser profile and a serial queue of up to eight active/pending requests. Queued cancellation submits nothing. Each request starts a fresh web conversation and resends its prepared host context. **Successful browser sessions are reused.** Failure, cancellation, relevant configuration changes or disposal retire the browser. The provider does not synchronize with the Webview's history.
+- **Web history is not disabled or automatically deleted.** One user task can produce a new web conversation for every tool round trip. Each may retain JSON prompts containing conversation context, code and tool results. Organizational retention/audit policy may apply. Local count-only diagnostics do not prevent this web history.
+- No token streaming: validated text and tool calls are returned after the complete JSON response is collected. Web round trips add latency at each Agent step.
+- `m365Agent.experimental.modelProvider.maxPromptCharacters` defaults to **60,000 characters**, maximum 120,000, including bridge instructions, history and schemas. This is separate from the Webview's 12,000-character default. The actual web input limit takes precedence. Only a **confirmed unsubmitted** length rejection can trigger one smaller rebuild; uncertain submissions are never resent.
+- Supports up to eight tool calls per response, without a fixed tool-schema count limit. Calls in one response may run concurrently; the bridge instructs the model to batch only independent actions and request verification reads after edit results in a later response. This does not enforce host execution order.
+- On overflow, old assistant/tool exchanges can be omitted at complete boundaries. **All System instructions, all user requests including intermediate restrictions, the latest tool exchange and all schemas remain.** Code and current tool results are not silently cut in the middle.
+- Exact repeated user text parts of at least 512 characters can reference their full source within the same request. The first/latest user messages stay unchanged. The public input does not reliably separate user prose from attachments, so arbitrary text/XML sections are not discarded as attachments. Unique attachments and user instructions can still accumulate beyond the limit.
+- Compaction metadata states only the methods actually used. **Start a new Chat** if required context exceeds the limit. If the first request fails, use the compact Agent or adjust the provider limit to a value supported by your web input. There is no fixed supported turn count.
+- Token counts are approximate: UTF-8 bytes divided by three, rounded up. The advertised input budget uses the same units and reserves bridge overhead. It is conservative for multilingual input; the actual character limit is checked separately. Output tokens are an experimental allowance. The web model's tokenizer and true context/output limits are neither discovered nor enforced.
+- The provider validates tool names, IDs, argument objects and required-call mode. Input-schema validation and execution authorization belong to the host/tool. It does not execute local commands, files or MCP tools itself.
 
-- `＋ 파일`로 최대 5개 파일을 명시적으로 첨부합니다. `현재 파일`은 열린 편집기 또는 선택 영역을 포함합니다.
-- `/ask`는 읽기 전용으로, `/agent`는 파일·명령 도구를 사용할 수 있는 일반 작업으로 명시합니다. 자동 판별을 바로잡을 때 요청 앞에 붙이면 됩니다. `/agent`도 파일 변경을 강제하지 않습니다. `/plan`, `/review`, `/test`는 계획·검토·테스트 단축 요청입니다.
-- 대화 문맥을 이어서 요청할 수 있습니다. `＋`는 새 대화, 시계 모양의 `대화 기록` 아이콘은 기록 목록을 엽니다. 제목 검색, 이름 변경, 개별 삭제, 전체 삭제를 지원합니다. 이름 변경·삭제는 현재 작업 영역의 VS Code 저장 기록에만 적용되며 Copilot 웹 원본과 프로젝트 파일은 유지됩니다. 삭제에는 확인창이 표시됩니다. 최근 20개 대화를 현재 VS Code 작업 영역의 로컬 저장소에 보관합니다. 기록 전환과 새 웹 대화는 현재 자동화 탭을 재사용합니다. 작성 중인 웹 초안이나 진행 중인 웹 응답이 있으면 전환하지 않습니다. 모델에 전달하는 이전 대화는 크기에 맞춰 최근 일부로 제한됩니다.
-- 연결된 웹 대화의 주소와 VS Code 대화를 매핑합니다. 사이드바가 보이고 작업 중이 아닐 때 5초마다 현재 연결된 웹 대화를 읽습니다. 상단 `더 보기(⋯)` → `웹 대화 동기화`로 바로 동기화할 수도 있습니다. 웹에서 추가한 질문·답변은 로컬 기록과 다음 요청의 문맥에 반영합니다. 동일 메시지는 중복 추가하지 않고 로컬 도구 기록도 유지합니다. `기록`에서 연결된 대화를 고르면 해당 웹 대화도 다시 엽니다. 기록 선택·새 대화·작업 시작 이후 도착한 오래된 동기화 결과는 적용하지 않습니다.
-- VS Code의 새 요청은 연결된 웹 대화로 전송됩니다. 과거 로컬 기록 전체를 웹으로 재전송하거나, 열지 않은 웹 대화 전체를 내려받거나, 삭제를 양쪽에 전파하는 기능은 아닙니다. 현재 연결된 탭에 렌더링된 메시지만 가져오므로 웹의 가상 스크롤·화면 구조에 따라 오래된 메시지가 빠질 수 있습니다. 이력 가져오기로 JSON 파일 수정·명령 실행을 재실행하지 않습니다. 원시 도구 프롬프트는 질문으로, 응답 JSON은 사용자에게 보일 설명으로 정리합니다. 웹 화면 자체의 원시 JSON 표시를 바꾸지는 않습니다.
-- 파일 읽기·검색·명령의 진행 상태는 채팅의 도구 카드에 표시됩니다. 명령의 실제 출력은 `M365 Code Agent` 출력 패널에 표시됩니다.
-- 첫 요청 전에 확장이 프로젝트 파일을 탐색하고, 요청과 관련된 소스·진입점·설정 중 기본 예산에서는 최대 2개(큰 예산에서는 최대 4개)를 범위 읽기해 실제 본문을 전달합니다. `현재 파일`이나 수동 첨부가 없어도 동작합니다. 전체 프로젝트를 모두 읽었다고 간주하지 않으며, 모델이 추가로 목록·검색·읽기를 요청합니다.
-- 상단의 `프로젝트 점검`은 M365 연결 없이 파일 읽기와 임시 파일 생성·읽기·삭제를 검사합니다. 프로젝트 루트의 `.m365-agent-check-<임의 ID>.tmp`만 잠시 만들며 기존 코드는 수정하지 않습니다. 이는 루트에 대한 쓰기 점검으로, 모든 소스 파일의 개별 권한을 보장하지는 않습니다.
+Disabling the provider stops its active web response and rejects pending requests. Only provider settings and the URL, browser channel, selectors and login/response timeouts used by it invalidate requests. Webview-only settings such as `browserView` and the Webview's `maxPromptCharacters` do not interrupt provider work.
 
-예: `src/average.js가 빈 배열을 받으면 null을 반환하도록 수정하고 테스트 파일을 만들어줘.`
+The **M365 Web Model** output channel records phases, role/message/tool counts, character counts and error codes. It does not log prompts, source text, arguments, responses, tokens or cookies. A host context-budget error with no provider request log indicates a preflight rejection.
 
-- VS Code 확장이 로컬 파일 도구를 실행합니다. Copilot 웹 자체에는 로컬 파일 접근 권한을 주지 않으며, 확장이 읽은 본문과 도구 결과를 웹 프롬프트로 전달합니다.
-- 읽은 파일의 해시가 맞는 수정안만 적용합니다. 수정 중 파일이 바뀌었거나 저장하지 않은 사용자 편집이 있으면 적용을 거부합니다.
-- 기본적으로 `변경 승인`이 켜져 있습니다. 파일명을 눌러 VS Code diff를 열고 `적용` 또는 `거절`을 선택합니다. 체크를 해제하면 일반 파일의 검증된 수정안을 자동 적용·저장합니다. 실행 설정과 명령은 계속 승인이 필요합니다.
-- `package.json`, `*.config.{js,cjs,mjs,ts,cts,mts,jsx,tsx}`, `.mocharc.js`, `.eslintrc.js`, `jest.setup.ts`, `setup.jest.js`, `test/setup.js`, `.pre-commit-config.yaml` 등 실행 설정·초기화 파일과 `conftest.py`, `pytest.ini`, `tox.ini`, `noxfile.py`, `gradlew`, `mvnw`, `.cargo/`, 작업·CI·빌드 설정과 셸 스크립트는 `변경 승인`만 꺼도 계속 검토받습니다. 아래 `승인 없이 진행`을 별도로 켜면 이 검토도 자동 승인됩니다. 명령 승인 카드에도 이번 확장 실행에서 해당 작업 영역에 적용한 파일 변경과 diff를 표시하고, 이번 요청과 이전 요청에서 변경한 파일을 구분합니다. 이전 요청의 변경 내역을 지우지는 않습니다. 이 보호 장치가 프롬프트 인젝션을 완전히 막거나 셸을 격리해 주지는 않습니다.
-- 생성·수정·삭제 변경은 VS Code diff와 Git diff로 검토할 수 있습니다. 삭제는 `D · 삭제`로 표시하며 명령 승인 카드에도 삭제 상태를 표시합니다.
-- `중지` 이후의 응답은 파일에 적용하지 않습니다. 이미 적용·저장된 파일은 유지합니다.
-- `되돌리기`는 마지막 파일 변경 묶음을 복원합니다. 새로 만든 파일은 제거하고, 삭제한 파일은 원본 바이트로 복원합니다. 이후 사용자 편집이 있으면 덮어쓰지 않습니다. 최대 20개 묶음을 이번 확장 실행 동안 보관하며 VS Code 재시작 후에는 사용할 수 없습니다. 터미널에서 발생한 변경은 포함하지 않습니다.
-- Agent가 테스트·빌드 명령을 요청하면 기본적으로 **실행할 명령과 작업 폴더를 표시하고 매번 승인**받습니다. `승인 없이 진행`을 켠 요청은 명령 승인도 생략합니다. 명령은 해당 PC의 기본 셸에서 사용자 권한으로 실행되며, 별도 샌드박스는 아닙니다. 120초 제한, 중지, 출력 크기 제한이 적용됩니다. 프로젝트 실행 도구(Node.js, Python 등)는 해당 프로젝트에 맞게 설치되어 있어야 합니다.
-- 파일 변경은 생성·전체 교체·부분 수정·삭제를 지원합니다. 큰 파일은 `read_file`의 `startLine`/`startColumn`/`lineCount`로 나누어 읽고, 읽은 범위의 고유한 `oldText`를 `newText`로 바꾸는 `edit` 작업으로 고칩니다. `nextLine`/`nextColumn`으로 긴 한 줄도 이어 읽을 수 있습니다. 파일 해시 충돌, 읽지 않은 범위, 중복 문구, 겹치는 수정은 거부합니다. 전체 교체에는 전체 읽기가 필요합니다.
-- 모든 완료 응답 뒤에 실제 적용 파일 수를 별도로 표시합니다. 모델이 설명만 반환하면 변경 0개를 표시하며, `changes` 응답을 강제하는 재요청은 하지 않습니다. 모델의 설명을 파일 적용 증거로 취급하지 않습니다.
-- 이름 변경 전용 도구, 인라인 자동 완성, 원격·백그라운드 에이전트는 제공하지 않습니다.
+### Live-account verification
 
-`.git`, `node_modules`, 가상환경, `.env*`, 개인 키·인증서, `.npmrc`/`.netrc`, 확장자 없는 SSH 키, `credentials`, `*.tfstate*`, `appsettings*.json` 등의 경로와 루트 `.gitignore` / `.m365agentignore`에 지정된 파일은 제외합니다. 이름 기반 차단은 모든 비밀을 식별하지 못하므로 프로젝트의 민감 경로는 `.m365agentignore`에 추가하세요.
-심볼릭 링크·정션 및 프로젝트 밖 경로는 접근하지 않습니다. 단일 로컬 폴더를 대상으로 동작하며 다중 루트에서는 작업할 폴더를 선택합니다.
-텍스트 파일 크기는 기본 16MB, 설정에서 최대 128MB입니다. 한 번의 변경은 최대 30개 파일, 변경 요청 본문 총 512KB로 제한합니다. 부분 수정은 큰 파일 전체 크기가 아니라 교체할 oldText/newText를 기준으로 이 한도를 계산합니다. 웹에는 파일 전체를 올리지 않고 필요한 범위를 전달합니다. UTF-8 및 BOM이 있는 UTF-16을 읽으며, 다른 인코딩은 VS Code에서 열린 문서의 텍스트를 사용할 수 있습니다.
+Verified on **November 18–19, 2026, VS Code 1.147.0**, using a compact read/edit Agent, the **Copilot** execution path and an actual M365 web account:
 
-검증 실패 후 같은 질문을 되풀이하지 않도록 후속 요청에 고정된 작업 ID·완료한 도구·적용 파일·최근 오류를 전달합니다. 실패한 수정안은 대상 파일을 범위 읽기하고, 삭제 대상은 실제 경로 종류에 따라 file_info 또는 folder_info로 확인해 내용·hash 교정을 요청합니다. 같은 결과나 검증 실패만 계속되면 무의미한 재전송을 중지하고 실제 적용 수·원인을 표시합니다. 새 범위를 읽거나 파일이 실제로 바뀐 경우는 새 근거로 처리합니다. 동일한 파일 내용을 다시 적용하는 수정안은 진전으로 세지 않으며 적용하지 않습니다. 명령은 매번 실제 실행하되 같은 명령·결과만 반복되면 중지합니다. 소스 변경 뒤 같은 테스트를 다시 실행하는 경우는 새 진전으로 처리합니다. 이를 통해 모델이 항상 복구한다고 보장하지는 않으며, 실패한 수정안을 임의로 적용하지 않습니다.
+- Changed a calculator's subtraction bug to addition and completed read → edit → tool-result-based completion. The first run used a 120,000-character setting. After matching token-budget units, separate tasks also worked at the then-default 48,000-character limit.
+- A first request needed approximately **46K total characters**: about 39K of messages, 5K of tool schemas and bridge overhead. This is a measurement, not a universal minimum. Smaller web inputs can reject even the compact Agent's first request.
+- A concurrent edit/read initially returned pre-edit verification content. After clarifying dependencies in bridge instructions, a separate subtraction-function test completed read → edit → post-edit read → Korean completion over four model requests.
+- Tested **five user turns in the same Chat**. At 48,000 characters, turn three saved the edit and read it back, but final completion failed with a minimum required context of **48,370 characters**. Increasing the limit to 60,000 allowed that Chat to continue through turn five. Added `square`, `cube` and `negate`, verified saved files and recalled initial/intermediate restrictions. The final request used about **53.7K total characters**, including roughly 46.9K of messages and 5K of schemas. This measurement informed the new 60,000-character default.
+- Outside the Agent, the saved calculator passed 12 arithmetic assertions and a source-preservation check for its three original functions. Live testing exercised old-exchange omission; exact repeated-text references are covered separately by automated tests.
 
-## 파일·폴더 삭제
+These results do not establish compatibility with the default Agent's full tool set, every MCP configuration, longer conversations or every tenant. **A successful single task does not establish unrestricted multi-turn support.** The full-tool default Agent's context-budget failure was reproduced. No claim of a seven-to-nine-turn ceiling is made; prompt size depends on content and host behavior.
 
-예: `src/legacy.js 파일을 삭제하고 이 파일을 참조하는 import도 정리해줘.`
+## Webview chat, browser and history
 
-- 프로젝트 안의 텍스트·바이너리·빈 파일을 삭제할 수 있습니다. 폴더와 빈 하위 폴더 삭제도 지원합니다. `folder_info`로 트리 전체를 확인한 뒤 같은 `delete` 작업으로 삭제합니다. 기존 제외 경로·비밀 파일·심볼릭 링크 보호는 그대로 적용합니다.
-- 먼저 `read_file` 또는 `file_info`로 확인한 해시를 검증합니다. `file_info`는 파일만 처리하며 바이너리에도 사용할 수 있습니다. 폴더를 넘기면 `folder_info` 사용 안내와 함께 거부하고 폴더 삭제 권한을 기록하지 않습니다. `folder_info`는 폴더 전체를 확인한 트리 해시를 반환합니다. 파일 도구는 파일 경로·크기·바이트 해시만 모델에 전달합니다. 바이너리만 있는 폴더도 본문 분석으로 간주하지 않고 파일 정보를 확인해 작업합니다.
-- 삭제는 기본적으로 검토가 필요하며, `변경 승인`만 끈 일반 파일 자동 적용에서도 삭제는 검토합니다. 명시적으로 **승인 없이 진행**을 켠 요청은 삭제도 자동 적용합니다. 변경 카드에서 `D · 삭제` 표시와 diff를 확인할 수 있습니다.
-- 편집 중 저장하지 않은 내용이 있거나 확인 후 파일이 바뀌면 삭제하지 않습니다. 삭제 원본은 현재 실행의 되돌리기 백업에 보관하며 바이너리·UTF-16·줄바꿈·빈 파일도 원래 바이트로 복원합니다. 삭제 후 같은 경로에 새 파일이나 폴더가 생겼으면 덮어쓰지 않습니다.
-- 파일별 크기는 파일 크기 설정을 따릅니다(기본 16MB). 한 변경 묶음은 최대 30개 작업이며 삭제 원본 백업 총량은 32MB입니다. 폴더 하나는 루트 포함 하위 파일·폴더 합계 1,000개까지 지원합니다. 제외 파일·폴더나 링크가 하나라도 포함되면 폴더 전체 삭제를 거부합니다. 백업은 메모리에 보관하므로 VS Code 재시작 후에는 확장 되돌리기로 복원할 수 없습니다.
-- 폴더 삭제는 확인한 파일과 빈 하위 폴더를 순서대로 삭제하며 무차별 재귀 삭제를 사용하지 않습니다. 검토 후 트리가 바뀌면 거부하고, 실제 삭제 직전에 추가된 파일 때문에 폴더가 비워지지 않으면 중단합니다. 부분 삭제 시 사라진 원본만 복원하고 새 파일은 유지합니다. 빈 폴더도 복원하며, 삭제와 내부 파일 수정을 같은 묶음에 중복 지정하지 않습니다.
-- VS Code가 일괄 변경 일부를 완료하지 못하면 이미 삭제된 파일의 백업을 유지하고 작업을 중단합니다. `되돌리기`로 복원할 수 있습니다. 터미널 명령으로 삭제한 파일은 이 백업에 포함되지 않습니다.
+The existing M365 Agent view remains available without enabling the model provider. Use the same input for explanations, plans, reviews and edits. `/ask`, `/plan` and `/review` are read-only; `/agent` explicitly allows ordinary Agent tools without forcing a file change. `/test` is a testing shortcut. Language heuristics are imperfect; default approvals remain in force.
 
-이 절의 해시·경로·백업 보호는 `changes` 파일 작업에 적용됩니다. 모델에는 삭제를 `changes`로 제안하고 셸로 삭제하지 않도록 지시하지만, 셸 실행기에서 삭제 명령을 강제로 차단하는 것은 아닙니다. 승인한 셸 명령에는 파일 도구의 프로젝트 경로·비밀 파일 차단이 적용되지 않으며, 명령이나 실행한 스크립트가 프로젝트 밖 파일에 접근·수정·삭제할 수 있습니다.
+- A request can wait up to ten minutes for login/composer readiness. It resumes once ready. Input may be re-entered only after a confirmed pre-submit reset; an already-clicked send is never automatically clicked again. Failed requests return to the VS Code input without replacing a newer draft.
+- **모델 불러오기** (Load models) reads the account's visible web menu. It does not invent models or bypass license restrictions. Use the current web model if no compatible menu is found.
+- **＋ 파일** attaches up to five files. **현재 파일** includes the current editor/selection. Initial inspection also searches relevant paths/code and reads up to two ranges at the default budget, up to four at larger budgets. It does not claim to inspect the whole project.
+- **프로젝트 점검** (Project check) tests local reads and creates/reads/removes only a temporary `.m365-agent-check-<id>.tmp` in the project root, without contacting M365 or changing source files. It does not prove every file is writable.
+- Local history retains the latest 20 conversations per workspace. Search, rename and delete affect local records only, with deletion confirmation. Project files and web originals remain. History switching/new Chat reuses the tab and refuses to overwrite a web draft or interrupt ongoing generation.
+- Local conversations map to their web URLs. While the view is visible and idle, current rendered web messages synchronize every five seconds; **웹 대화 동기화** triggers this manually. Imported JSON never executes file/command actions. Old in-flight sync cannot override a newer history selection or task.
+- Synchronization is limited to messages rendered in the connected tab. It does not download every web conversation, upload all old local history or propagate deletions. Web virtualization may omit older messages.
 
-## 요청 횟수 무제한
+`m365Agent.browserView=editor` displays the actual Playwright page in a VS Code Webview with mouse, scrolling, keyboard and Korean IME support. Input is locked during automated submission/collection/model-menu actions and allowed while waiting for login. A tab selector can show login popups from the same dedicated browser.
 
-기본 안전 한도는 100회입니다. 입력창 아래 `모델 · 첨부 · 승인`을 펼쳐 **요청 횟수 무제한**을 켜면 그 요청에 횟수 한도를 적용하지 않습니다. 기본값은 꺼짐이며, VS Code 대화 화면 상태에 선택을 보관합니다. 작업 시작 때 선택을 고정하고 실행 중에는 바꿀 수 없습니다. 설정을 접어도 `무제한` 상태를 표시하며, 실행 중에는 현재 요청 횟수를 계속 표시합니다.
+Closing the browser editor does not stop automation. Use **⋯ → Copilot 브라우저 열기** to reopen it. Switching to an external browser stops the task and restores its request to the input; log in and resend. For a persistent external window, set `browserView` to `external` and reload. Native passkey/certificate/password-manager flows may require that mode.
 
-이 옵션은 **승인 없이 진행과 독립적**입니다. 무제한만 켜도 파일·명령 승인을 생략하지 않고, 자동 승인만 켜도 횟수 한도는 유지합니다. 두 옵션을 각각 켜거나 함께 사용할 수 있습니다. 반복 감지, 중지, 완료·오류 종료, 파일 검증과 읽기 전용 제한은 유지합니다. 확장 자체의 요청 횟수만 해제하며 M365의 서비스 동작이나 로그인 절차는 바꾸지 않습니다.
+The browser view is not an iframe or the experimental BrowserTab API. Frames stay in memory; it does not save screen files, extract cookies/tokens or change web security headers. Capture pauses when hidden, and displayed URLs omit authentication query/fragment data.
 
-## 승인 없이 진행
+Answers support Markdown, code copying and adjustable 12–18px text/wrapping. **크게 보기** opens a reusable read-only answer editor without creating project files. Tool/system activity collapses into groups, failed tools expand and review cards remain visible. New events preserve scroll while reading an older answer. HTML and remote images in answers are not executed/loaded.
 
-입력창 아래 `모델 · 첨부 · 승인`을 펼쳐 **승인 없이 진행**을 켜면 해당 요청에서 일반 파일·실행 설정 변경과 터미널 명령을 자동 승인합니다. 기본값은 꺼짐입니다. 선택은 VS Code 대화 화면 상태에 보관하며, 접혀 있어도 승인 상태를 표시합니다. 작업을 시작할 때 선택한 정책을 고정하고 작업 중에는 바꿀 수 없습니다. 모델 답변이나 프로젝트 설정으로 이 옵션을 켜지 않습니다.
+## File changes, approval and commands
 
-자동 승인에서도 파일 도구에는 작업 영역 신뢰, 경로·비밀 파일 차단, 읽은 내용과 해시, 수정 범위, 저장하지 않은 변경 보호를 그대로 적용합니다. **실행 설정 파일의 강제 검토와 명령 승인도 생략**되므로, 모델이 실행 스크립트를 바꾸고 이어서 실행할 수 있습니다. 셸 명령은 사용자 권한으로 실행되며 프로젝트 밖 파일에도 영향을 줄 수 있고, 명령이 만든 파일 변경은 확장의 되돌리기 대상이 아닙니다. 반복 감지·시간 제한·중지는 이미 발생한 명령의 영향을 복구하지 않습니다. 파일 diff·자동 승인 기록·파일 도구 변경 되돌리기는 계속 제공합니다. `/ask`, `/plan`, `/review`의 읽기 전용 제한은 유지합니다. 로그인·MFA·CAPTCHA는 직접 처리해야 합니다.
+File tools run in the extension host, not inside the Copilot website. Read source and tool observations enter web prompts; the website receives no direct workspace access.
 
-## 모델 도구와 명령 실행
+- **변경 승인** (Review changes) is on by default. Open each file's VS Code diff, then apply or reject. Turning review off automatically applies validated ordinary-file edits, while deletion, execution-config changes and commands still require review/approval.
+- Execution/build/CI configuration, setup hooks and shell scripts remain reviewable by default, including `package.json`, `*.config.*`, test initialization, Python test configuration, wrappers and `.cargo/` files. This is not a complete prompt-injection defense.
+- Create/full-replace/partial-edit/delete operations are supported. Whole-file replacement requires a complete read. Paged `read_file` ranges use `startLine`, `startColumn`, `lineCount` and continuation coordinates. Partial edits require a unique `oldText` in a previously read range with the current hash. Stale hashes, unread ranges, duplicate anchors and overlapping edits are rejected.
+- Unsaved user changes are not overwritten. Results arriving after Stop are not applied; changes already saved remain. Completion reports the actual applied-file count, including zero; a prose claim is not proof of an edit.
+- Undo restores the last file-change batch, removes created files and restores deleted bytes. It refuses to overwrite subsequent edits or recreated paths. Up to 20 batches remain in memory during the current extension session; restart loses this undo. Shell/MCP effects are excluded.
+- Default command execution shows the exact command and working directory and requires approval every time. It runs with your user privileges, without a sandbox, and can affect paths outside the project. Commands have a 120-second timeout, cancellation and bounded output. The **M365 Code Agent** output channel shows actual command output.
+- Commands run in a background shell: `ComSpec` (normally `cmd.exe`) on Windows, `/bin/sh` elsewhere. They do not inherit a selected VS Code terminal's PowerShell, virtual environment or current directory. Explicitly invoke another installed interpreter when needed.
 
-`read_file`, `file_info`, `folder_info`, `list_files`, `search_text`는 확장이 실행하는 로컬 파일 도구입니다. Agent 모드에서는 `run_command(command)`도 안내합니다. Copilot 웹의 내장 도구 권한이 아니라, 모델이 `kind: "tools"`의 `calls`에 요청하면 VS Code 호스트가 검증·승인 정책에 따라 실행하고 실제 결과를 다음 요청에 전달하는 JSON 프로토콜입니다. 파일 생성·수정·삭제는 별도의 `kind: "changes"`로 제안합니다.
+**승인 없이 진행** (Proceed without approval) is a separate, explicitly selected option, off by default. It automatically approves file changes, execution-config review and terminal commands for that task. File-tool path, secret-name, hash, range, dirty-file and read-only checks remain. Shell commands are outside those protections and undo, including commands invoked by changed configuration. File-tool deletion guidance does not forcibly block shell deletion commands.
 
-명령 실행이 필요하면 모델은 승인 대기 문장만 반환하지 않고 `run_command` 호출을 제출해야 합니다. 호스트가 승인 화면을 표시하며, 승인 전에는 명령을 실행하지 않습니다. Ask/Plan 모드에서는 명령 도구와 호출 예시를 안내하지 않고, 모델이 임의로 호출해도 호스트가 거부합니다. 프롬프트 개선만으로 모델이 항상 올바른 도구 요청을 생성한다고 보장하지는 않습니다.
+**요청 횟수 무제한** (Unlimited requests) independently removes the extension's round-count ceiling for that task. The normal default is 100 requests, configurable up to 500. Both options are frozen at task start and remain visible when controls collapse. Unlimited requests do not remove approval, repetition detection, Stop, completion/error termination or file validation. They do not change M365 limits or authentication.
 
-## 회사 Code Assistant 에이전트 사용
+The extension excludes common generated/dependency/virtual-environment paths, `.git`, `.env*`, keys/certificates, `.npmrc`/`.netrc`, credential/state names and root `.gitignore`/`.m365agentignore` rules. Links/junctions and paths outside the selected project are refused by file tools. Text reads default to 16MB, configurable to 128MB. A change batch allows up to 30 operations and 512KB of proposed content; partial edits count replacement strings rather than the entire source file. UTF-8 and BOM-marked UTF-16 are supported, with open-editor text available for other encodings.
 
-기존에 만든 M365 Code Assistant를 사용할 수 있습니다. 그 에이전트를 연 웹 주소를 VS Code 설정의
-`m365Agent.copilotUrl`에 입력합니다. 필수는 아니며 일반 M365 Copilot 대화에서도 프로토콜 지침을 매 요청 전달합니다.
-데스크톱 M365 앱에 직접 IPC/API로 연결하는 제품은 아닙니다. Edge에서 M365 웹을 자동 조작합니다.
+Failed proposals trigger targeted rereads and correction using real hashes. Task IDs, executed tools, applied files and recent errors carry into follow-up requests. Repeated unchanged reads, errors, proposals or command outcomes stop unproductive loops; a genuinely new range, source change or rerun after a source change is new evidence. This does not guarantee recovery or justify applying invalid proposals.
 
-## 연결 진단과 화면 변경
+### File and folder deletion
 
-특정 계정의 실제 로그인·응답 수집은 확인했지만, M365의 화면 구조·실험적 UI·조직 정책에 따라 자동 감지를 조정해야 할 수 있습니다. 아래 확인 범위가 모든 회사 테넌트의 연동 검증을 뜻하지는 않습니다.
-`더 보기(⋯)` → `연결 진단`은 현재 주소, 제목, 입력창 감지 결과와 최근 전송 단계를 VS Code 출력 패널에 표시합니다. 쿠키·토큰과 파일 내용은 연결 진단 로그에 기록하지 않습니다. 승인한 명령과 그 출력은 출력 패널에 표시됩니다.
-응답이 화면에 보이는데 기다리는 경우에는 `응답 수집 진단`의 후보 수·현재 요청 ID 수·JSON 해석·생성 상태를 확인하세요. 수집은 코드 블록 외에 현재 요청 ID가 있는 작은 응답 영역, 열린 Shadow DOM과 자식 프레임도 탐색합니다. 언어명·복사 버튼 문구는 JSON 객체 밖에서 분리하며, 캡처한 답변 본문은 진단 로그에 저장하지 않습니다. 닫힌 Shadow DOM이나 화면에 전체 텍스트를 노출하지 않는 위젯은 수집하지 못할 수 있습니다.
+Text, binary and empty files are supported. `file_info` checks file bytes/hash; `folder_info` records a full checked tree/hash. Passing a folder to `file_info` does not authorize deletion.
 
-설정에서 다음을 조정할 수 있습니다.
+Deletion is marked **D · 삭제** in review cards. Dirty/changed files, ignored or secret paths and links are refused. A folder permits up to 1,000 entries including its root; one excluded entry/link rejects the whole operation. Deleted-byte backups are bounded to 32MB per batch, and per-file size limits still apply.
 
-- `m365Agent.composerSelector`: 입력창의 CSS 선택자. 기본값은 자동 감지입니다.
-- `m365Agent.sendButtonSelector`: 전송 버튼의 CSS 선택자. 기본값은 한국어·영어 버튼 자동 감지입니다. 활성화된 버튼을 클릭하고 입력창 초기화·생성 시작·새 응답으로 제출을 확인합니다. 제출을 확인하지 못하면 빠르게 오류를 표시하고 자동 재전송하지 않습니다.
-- `m365Agent.responseSelector`: 응답 코드/메시지를 감싸는 CSS 선택자. 기본값은 코드 블록과 알려진 응답 컨테이너입니다.
-- `m365Agent.responseTimeoutSeconds`: 응답 대기 제한(기본 240초).
-- `m365Agent.loginTimeoutSeconds`: 로그인·입력창 준비 대기 제한(기본 600초). 대기 중 요청은 보관하고 `중지`로 취소할 수 있습니다.
-- `m365Agent.modelButtonSelector`: 모델 선택 메뉴의 CSS 선택자(기본 자동 감지).
-- `m365Agent.maxRounds`: 작업당 Copilot 요청의 보조 안전 한도(기본 100회, 최대 500회). 이전에 직접 설정한 값은 유지합니다. 작업 중에는 현재 요청 번호와 안전 한도를 표시합니다. 새 결과가 있으면 한도 안에서 계속하고, 새 결과 없는 반복은 한도 전에 중지합니다. `요청 횟수 무제한`을 켠 요청에는 이 한도를 적용하지 않으며 반복 감지와 중지는 그대로 유지합니다. 기본 12,000자 예산에서는 도구를 한 응답당 최대 2개 실행하며, 초과 호출은 실행하지 않았다고 명시해 다음 요청에서 다시 요청하게 합니다. 입력 예산에 따라 한 번에 1~4개를 허용합니다. 기본 입력 한도를 실제 테넌트 검증 없이 높이지 않습니다.
-- `m365Agent.maxFileSizeMB`: 로컬 파일 읽기·정보 확인 크기 상한(기본 16MB, 최대 128MB). 삭제 백업은 묶음당 총 32MB 이내입니다.
-- `m365Agent.maxPromptCharacters`: 요청 길이 상한(기본 12,000자). 입력창의 실제 한도가 더 작다고 전송 전에 확인되면 오래된 대화·파일 목록·첨부 문맥을 줄여 재구성합니다. 본문 범위를 더 줄일 때는 complete=false와 이어 읽기 위치를 명시합니다. 범위를 전달할 수 없으면 도구 오류로 모델에 알립니다. 사용자 요청과 코드 내용을 중간에서 잘라 보내지 않습니다.
-- `m365Agent.browserView`: 기본 `editor`(VS Code 브라우저 탭). `external`은 별도 브라우저 창입니다.
-- `m365Agent.browserChannel`: Edge(msedge) 또는 Chrome(chrome).
-- `m365Agent.commandOutputEncoding`: 기본 `utf8`. CP949 전용 도구는 `cp949`로 설정합니다. Windows 명령의 코드페이지와 출력 디코더를 함께 맞추며, 멀티바이트 문자가 출력 조각 경계에서 깨지지 않도록 스트림으로 처리합니다.
+Folder removal deletes only checked files and then known empty directories; it is not an unrestricted recursive delete. Changed trees or newly added files stop removal. Partial rollback restores missing originals and empty directories without deleting new files or overwriting recreated paths. A partially failed VS Code operation retains backups and stops instead of retrying. Terminal deletions are outside this mechanism.
 
-설정을 변경한 뒤 VS Code의 `개발자: 창 다시 로드`로 전용 브라우저 연결을 다시 만드세요.
-Copilot 입력창에 직접 작성 중인 내용이 있으면 덮어쓰지 않고 작업을 중단합니다.
-응답은 요청별 ID가 일치하는 구조화된 JSON만 받습니다. 응답 형식 오류나 시간 초과 시 파일을 적용하거나 요청을 자동 재전송하지 않습니다.
-현재 요청 ID가 같은 여러 JSON은 중복을 제거하고 합칩니다. 서로 다른 파일의 수정안은 한 묶음으로, 같은 파일의 부분 수정은 같은 hash일 때 함께 검증합니다. 동일 파일의 다른 전체 본문·다른 hash·상충하는 교체 내용은 응답 생성이 끝난 뒤에도 충돌이 유지되면 적용하지 않습니다. 겹치는 부분 수정은 로컬 파일 검증에서 거부합니다. 여러 완료 설명은 합쳐 표시합니다. 도구 요청과 수정안이 함께 오면 도구만 먼저 실행하고 실제 결과·hash로 수정안을 다시 받습니다. 미리 온 수정안이나 완료 설명을 실행 결과로 취급하지 않습니다.
-응답 코드 블록은 표준 `json`을 사용합니다. 과거 `m365-agent` 언어 이름으로 인한 구문 강조 경고를 피합니다.
-입력은 DOM의 문단과 실제 텍스트로 검증하고, 진단에는 요청·확인 글자 수와 표시된 한도를 포함합니다. 길이가 달라도 곧바로 길이 제한으로 단정하지 않습니다.
-0.2.0이 남긴 식별 가능한 자동화 요청 초안은 다음 작업 전에 정리합니다. 일반 사용자 초안은 자동 삭제하지 않습니다. 자동 전송이 중단됐을 때 브라우저의 전송 버튼을 직접 누르지 말고 오류를 확인하세요.
+## Editor actions and diagnostic quick fixes
 
-## 동작 방식과 제약
+Select code, right-click **M365 Agent**, then choose explanation, review or an edit instruction. Explanation/review are read-only; canceling the edit instruction submits nothing. The same commands appear in the command palette.
 
-`VS Code 파일 도구 ↔ Playwright ↔ 전용 Edge의 M365 Copilot 웹`
+For an error/warning, use the lightbulb or `Ctrl+.` and select **M365 Agent로 수정안 요청: …**. This captures the chosen diagnostic's message, source, code, position and surrounding code. Merely opening the menu performs no request or edit, and the action is not a preferred automatic fix.
 
-파일 내용은 사용자가 로그인한 M365 Copilot 웹에 프롬프트로 전달됩니다. 별도 개발자 서버, 텔레메트리, 다른 AI 서비스로 보내지 않습니다.
-비공개 API 호출, 로그인 토큰 추출, 회사 보안 정책 우회는 하지 않습니다.
-이 방식은 Microsoft의 공식 Copilot API 연동이 아니며 웹 UI 변경, 조직의 브라우저 자동화 정책, 사용량 제한에 영향을 받습니다.
-Microsoft의 데이터 보호 설명은 적용 계약·관리 설정에 따른 보호를 설명하지만, 이 비공식 확장이나 브라우저 자동화의 사용 승인을 보장하지 않습니다. 회사의 DLP·코드 반출·브라우저 자동화 정책 및 적용 계약에 맞는 환경에서만 사용하세요. 로컬 파일을 웹 프롬프트에 붙이는 동작에 원본 파일의 민감도 레이블이 자동으로 따라간다고 보장하지 않습니다. [Microsoft의 기업 데이터 보호 설명](https://learn.microsoft.com/en-us/copilot/plan/enterprise-data-protection)을 참고하세요.
-전용 Edge를 사용하는 웹 자동화입니다. 기본값에서는 화면을 VS Code 탭에 표시하며, 외부 모드의 브라우저 창을 직접 닫으면 다시 연결해야 합니다. 실제 회사 로그인과 응답 언어 동작은 해당 테넌트에서 검증해야 합니다.
-WSL/SSH/컨테이너 등 원격 프로젝트는 이번 버전의 대상이 아닙니다.
+Editor requests begin with the target file; related files can be retrieved using tools. Edit/quick-fix requests force change review on, automatic approval off and round limits on, independently of the next sidebar request's options. The existing draft/options are preserved. Proposed changes enter ordinary diff review and undo.
 
-## 브라우저가 열리지 않을 때
+The document version, selection and diagnostic are captured at invocation. Changed source or a removed/changed diagnostic requires a fresh request; moving focus does not retarget the action. Save dirty files before edits. Explanation/review can use the current unsaved selected text. Only trusted local allowed files are accepted, and concurrent tasks are refused. Selections above 10,000 characters provide coordinates instead of silently clipped text, so the model can request ranges.
 
-연결 실패 시 출력 패널의 **M365 Code Agent**에 실패 단계와 원인 코드를 자동으로 기록합니다. `⋯ → 연결 진단` 또는 명령 팔레트의 `M365 Agent: 연결 진단`은 브라우저가 실행되지 않아도 동작합니다. 확장·VS Code·Node/OS 버전, 선택한 브라우저·표시 방식, 기본 설치 위치 확인, 전용 프로필의 임시 쓰기 검사 결과와 최근 실패를 표시하며 브라우저를 다시 실행하지 않습니다. 기본 경로에서 실행 파일을 찾지 못한 결과만으로 사용자 지정 설치가 없다고 단정하지는 않습니다.
+## Lookup-oriented MCP tools in the Webview
 
-- `PROFILE_ACCESS_FAILED`: VS Code 확장 저장소 접근·쓰기 권한 또는 저장 공간을 확인합니다.
-- `BROWSER_NOT_FOUND`: 선택한 Edge/Chrome 설치를 확인합니다. `PROFILE_IN_USE`이면 같은 전용 프로필을 사용하는 다른 VS Code 창의 M365 연결을 종료한 뒤 다시 연결합니다.
-- `BROWSER_PANEL_FAILED`: VS Code 창을 다시 로드하거나 `m365Agent.browserView=external`로 화면 표시를 확인합니다.
-- `BROWSER_CERTIFICATE_FAILED` / `BROWSER_PROXY_FAILED`: 회사 인증서·프록시·VPN 및 일반 브라우저의 M365 접속 상태를 확인합니다.
-- `BROWSER_NAVIGATION_TIMEOUT` / `BROWSER_NAVIGATION_FAILED`: 브라우저 실행 이후의 페이지 로딩 실패입니다. 현재 창의 상태를 확인하고 다시 연결합니다.
+Uses MCP-tagged tools already exposed by VS Code's Language Model Tools API, without importing server credentials/configuration or starting another MCP client. Host server trust, authentication and extra confirmations apply.
 
-페이지 로딩 실패 뒤에는 실행 중인 전용 브라우저를 재사용해 다시 연결합니다. 남아 있는 로그인 탭·정상 입력창은 보존하며, 오류 복구를 위해 프로필·쿠키를 삭제하거나 인증서/회사 정책 검사를 우회하지 않습니다. 출력에서 단계·원인 코드·실행 환경 결과를 확인할 수 있지만 이 진단만으로 실제 회사 환경의 원인이 해결됐다고 보장하지는 않습니다.
+1. Connect and start a trusted MCP server with read-only credentials in VS Code.
+2. Choose **⋯ → 조회용 MCP 도구 선택** (Select lookup MCP tools), or the corresponding command. Only explicitly selected tools are offered; selection is stored locally per workspace and cannot be enabled by a model response/project settings file.
+3. Request an Agent task using those tools. `/ask`, `/plan` and `/review` retain their read-only restrictions and do not invoke MCP.
+4. Review the exact tool name/JSON arguments and approve **each** call. Webview automatic approval does not bypass MCP approval. Rejecting or stopping prevents unstarted calls and sends cancellation to started calls.
 
-## 개발과 검증
+Only lookup-like names are offered; names indicating writes, deletion, execution or upload are excluded. **This name filter is neither a sandbox nor proof of read-only behavior.** Restrict server permissions themselves. A server's local/remote effects are outside extension diff/undo; returned code/hash/JSON does not grant file-write authority.
 
-### 실계정 확인 범위
+Up to 20 tools can be selected. Changed names/descriptions/schemas require reselection; schemas above 5,000 characters are excluded. Arguments allow 12,000 characters, depth 20 and 2,000 entries. Tool lists/results obey context budgets, with `nextOffset` for pagination. Only text results are passed; image/binary/PromptTsx results are omitted with counts. Metadata and returned text are untrusted data and may enter the M365 prompt.
 
-2026-11-16에 0.13.2를 설치한 별도 VS Code 프로필과 업무 코드가 없는 예제 프로젝트에서 사용자 직접 로그인, 실제 Copilot의 프로젝트 분석 응답, 두 파일의 수정안 검토·적용을 확인했습니다. 테스트 명령은 모델에 JSON 프로토콜 도구라는 추가 안내를 한 뒤 승인·실행하여 `npm test`의 2개 통과·0개 실패를 확인했습니다. 모든 단계가 첫 요청만으로 완료된 것은 아닙니다.
+Calls time out after 120 seconds. Timeout leaves the remote outcome unknown and ends the task. Identical rejected/failed calls are not automatically retried within that task. Cancellation cannot guarantee remote rollback; late results do not authorize later file changes.
 
-0.13.3은 Agent의 도구 목록·호스트 실행 설명·명령 호출 예시를 보완합니다. 변경한 프롬프트를 실계정에서 다시 검증한 결과나 조직별 SSO·MFA·DLP·프록시 호환성 검증은 포함하지 않습니다. 자동 테스트의 모의 Copilot 응답과 실제 VS Code 호스트 검증은 실계정 확인과 구분합니다.
+## Relevant code search
 
-### 로컬 검사
+`search_code(query, paths)` ranks code chunks using BM25 plus path matches and returns file/line/column/snippets. It splits common identifier styles and expands selected Korean development terms into English keywords. It is not general semantic search or arbitrary translation. Use `search_text` for literal matching. Both accept relative file/folder scopes and are available in Ask/Plan.
+
+Discovery can cover 20,000 files, respecting root and nested ignore rules, links, secrets and generated outputs. Index limits are 10,000 text files, 256KB per file, 32MB total and 40,000 chunks; traversal limits are 10,000 directories and 100,000 entries. Ranked results cap at 20; literal results at 40 with a 64MB cumulative file budget. Larger files can still be located by path and read in ranges.
+
+`truncated`, scanned/indexed counts and omission reasons expose incomplete coverage. No matches in a partial scan do not establish absence from the entire project. The memory-only index checks file lists/size/mtime on later searches; it does not inspect editor buffers or grant edit authority. Actual edits still require a read and current hash. Only budgeted results enter the prompt, not the whole index.
+
+## Settings and troubleshooting
+
+An existing company Code Assistant web URL can be set in `m365Agent.copilotUrl`; ordinary M365 Copilot chat also works because each request includes protocol instructions. Reload after changing Webview connection settings. Existing web drafts are not overwritten.
+
+| Setting | Default / purpose |
+| --- | --- |
+| `m365Agent.experimental.modelProvider.enabled` | `false`; user-level model-provider opt-in |
+| `m365Agent.experimental.modelProvider.maxPromptCharacters` | `60000`; separate provider transport budget |
+| `m365Agent.copilotUrl` | Copilot website URL; optional company-agent URL |
+| `m365Agent.browserView` | `editor`; `external` opens a separate browser window |
+| `m365Agent.browserChannel` | `msedge`; `chrome` is selectable |
+| `m365Agent.composerSelector` | Automatic composer detection; CSS override |
+| `m365Agent.sendButtonSelector` | Automatic send-button detection; CSS override |
+| `m365Agent.responseSelector` | Automatic response-container detection; CSS override |
+| `m365Agent.modelButtonSelector` | Automatic visible model-menu detection; CSS override |
+| `m365Agent.responseTimeoutSeconds` | `240` seconds |
+| `m365Agent.loginTimeoutSeconds` | `600` seconds |
+| `m365Agent.maxRounds` | `100`, up to `500`; existing user settings are retained |
+| `m365Agent.maxFileSizeMB` | `16`, up to `128`; deletion backups have a separate 32MB batch limit |
+| `m365Agent.maxPromptCharacters` | `12000`; Webview transport budget |
+| `m365Agent.commandOutputEncoding` | `utf8`; `cp949` is available for tools that require it |
+
+For provider context errors, start a **new Chat** first. If its first request fails, reduce tools/attachments or choose a supported limit. Do not infer a token-context size from a character limit. Increasing the setting cannot expand a smaller web input.
+
+**⋯ → 연결 진단** (Connection diagnostics) works even if the browser never opens. The **M365 Code Agent** output channel reports versions, selected channel/view, standard browser-install detection, a temporary profile write probe, failure stage and recent send state without relaunching the browser. Reported storage paths and URL query/fragment values are redacted.
+
+- `PROFILE_ACCESS_FAILED`: check extension-storage permissions and disk space.
+- `BROWSER_NOT_FOUND`: check the selected browser installation. `PROFILE_IN_USE`: close another extension connection using that dedicated profile.
+- `BROWSER_PANEL_FAILED`: reload or try `browserView=external`.
+- `BROWSER_CERTIFICATE_FAILED` / `BROWSER_PROXY_FAILED`: check corporate certificate/proxy/VPN setup and ordinary M365 access.
+- `BROWSER_NAVIGATION_TIMEOUT` / `BROWSER_NAVIGATION_FAILED`: inspect page loading and reconnect.
+
+Reconnect reuses live contexts and surviving login/composer tabs. Recovery does not delete profiles/cookies, bypass certificates or change organizational security policy. Missing a standard executable path does not prove a custom installation is absent.
+
+Only structured JSON with the current request ID is accepted. Equivalent blocks are deduplicated, compatible edits merged and persistent same-file conflicts rejected. Mixed tool/edit replies execute tools first and require fresh results before edits. Input text and meaningful whitespace are verified before sending; an uncertain send is never retried. A recognizable legacy automation draft can be recovered, but ordinary drafts are not deleted. Do not manually resend a stopped automation prompt without checking the error.
+
+This unofficial web automation depends on DOM structure, service limits, login state and organizational policies. It is not an official M365 desktop/API integration. Microsoft's contractual data protections do not constitute approval for this extension or guarantee propagation of source-file sensitivity labels to pasted prompts. See [Microsoft's enterprise data protection guidance](https://learn.microsoft.com/en-us/copilot/plan/enterprise-data-protection).
+
+## Development and validation
 
 ```powershell
 npm ci
@@ -191,26 +206,21 @@ npm run test:integration
 npm run package
 ```
 
-`npm run check`는 ESLint, Prettier 포맷 검사, JSDoc 기반 타입 검사를 실행합니다. `npm run format`으로 런타임 JS·개발 스크립트를 정리할 수 있습니다. `tool-call.js`, `workspace.js`, `changes.js`, `agent.js`에 `// @ts-check`를 적용하고 `strict: true`, `noImplicitAny: true`로 검사합니다. create/edit/delete 제안, 원본 바이트가 필수인 복원 백업, 승인 호스트와 에이전트 전송 계약은 `types/contracts.d.ts`로 구분하며 VS Code API는 최소 지원 버전의 공식 타입을 사용합니다. 전체 UI 모듈까지 검사한 상태는 아닙니다. 실행 코드는 CommonJS JavaScript 그대로이며 TypeScript·Prettier는 개발 의존성입니다.
+`check` runs ESLint, Prettier and JSDoc/TypeScript contract checks against the minimum supported VS Code API types. Runtime code remains CommonJS JavaScript; not every UI module is fully type-checked. `npm run format` formats runtime code and development scripts.
 
-정리 테스트는 OS 임시 폴더에 독립된 저장소를 만들고 실제 경로로 정규화하므로 저장소의 `.test-output`이 없어도 단독 실행할 수 있습니다. Windows 드라이브 문자가 다른 대소문자로 전달되는 경우와, 삭제 계획 후 실행 상태가 바뀌는 경우도 검사합니다.
+Browser tests use real Edge against local mock Copilot pages, with file-level concurrency limited to two. Integration tests run an actual VS Code extension host for files, approvals, dirty-file/race guards, MCP APIs and model-provider registration/tool round trips. CI runs these checks and packaging. Set `M365_AGENT_VSCODE_PATH` to use a particular local VS Code executable.
 
-테스트 산출물 정리 명령은 기본적으로 삭제 예정 목록만 표시합니다.
+Live-account tests are distinct from these mocks/host tests. The model-provider measurements above used one account and an example project. A separate November 16, 2026 Webview check with version 0.13.2 verified manual login, project analysis and reviewed two-file edits; test execution required additional tool-protocol guidance. Not every action succeeded on the first request. These checks do not validate every organization's SSO/MFA/DLP/proxy setup or all revised Webview prompts.
+
+Test-output cleanup is **dry-run by default**:
 
 ```powershell
 npm run clean:test-output
 npm run clean:test-output -- --apply --keep=3 --older-than-hours=24
 ```
 
-정리 범위는 이 저장소의 `.test-output/integration-*` 중 완료가 확인된 이전 실행 폴더뿐입니다. 최근 3개와 24시간 이내 결과를 보존하며, 실행 중인 프로세스·링크/정션·출처를 확인할 수 없는 폴더는 건너뜁니다. 새 실행에는 상태 마커를 기록하고 이전 성공 실행은 결과 보고서로 확인합니다. 프로젝트 코드·배포 파일·전용 Copilot 로그인 프로필과 상위 `.playwright-mcp` 기록은 이 명령의 정리 범위에 포함하지 않습니다. `--apply`를 지정해야 실제 삭제합니다. 계획 단계에서 후보 트리를 한 번씩 검사하고, 삭제 직전에는 보존 정책·현재 실행 목록을 갱신한 뒤 해당 대상의 트리와 완료 상태만 다시 확인합니다. 다른 후보 트리는 반복 순회하지 않습니다. 폴더 식별 정보가 바뀌거나 다시 실행 중이 된 대상은 삭제하지 않으며, 결과에 삭제한 파일 크기 합계(`removedBytes`)를 표시합니다.
+Only completed older `.test-output/integration-*` runs with verified ownership are candidates. The newest three, runs younger than 24 hours, active runs and unknown/link/junction paths are retained. Each candidate is revalidated before removal. Project code, release files, Copilot login profiles and parent-directory browser records are outside the cleanup scope. Fixtures use canonical OS temporary paths and test Windows drive-letter casing and ownership changes.
 
-무제한 루프 정책 단위 테스트는 메모리 데이터로 100회를 넘는 요청을 검증합니다. 실제 파일 읽기·해시·삭제·복원과 브라우저 UI 검증은 별도 실제 I/O 테스트를 유지합니다.
+Packaging rejects test outputs, browser profiles, credential paths and tracked test profiles. Source ZIPs are generated from `git archive`, not by compressing the working folder. Release documentation defaults to English; [한국어 README](README.ko.md) and `INSTALL.ko.txt` are optional alternatives.
 
-테스트는 로컬 파일 시스템, 해시·경로 보호, 모의 Copilot 페이지를 사용한 실제 Edge 입출력,
-웹뷰의 키보드·한글 입력·승인 UI, 별도 VS Code 테스트 호스트의 파일 생성·편집·삭제·저장·원본 바이트 복원 및 명령 승인을 확인합니다. 모의 페이지 검증이 회사 테넌트의 연동 검증을 대신하지는 않습니다.
-CI에서도 VS Code 확장 호스트를 실행해 큰 파일의 부분 수정과 실행 설정의 강제 검토를 검사합니다. 로컬에서 설치된 VS Code로 검증하려면 `M365_AGENT_VSCODE_PATH`에 실행 파일 경로를 지정할 수 있습니다.
-배포 스크립트는 `.test-output`, Edge 프로필·쿠키·키 경로가 VSIX에 포함되거나 테스트 프로필이 Git에서 추적되면 패키징을 중단합니다. 소스 ZIP은 `git archive`로 생성하며 작업 폴더 전체를 압축하지 않습니다.
-
-참고: [Playwright](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context),
-[VS Code Webview](https://code.visualstudio.com/api/extension-guides/webview),
-[VSIX 설치·패키징](https://code.visualstudio.com/api/working-with-extensions/publishing-extension).
+References: [Playwright persistent contexts](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context), [VS Code Webviews](https://code.visualstudio.com/api/extension-guides/webview), [VSIX packaging and publishing](https://code.visualstudio.com/api/working-with-extensions/publishing-extension).

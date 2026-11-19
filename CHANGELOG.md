@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0
+
+- Add an optional, disabled-by-default VS Code language model provider, `M365 Web (Experimental)`, alongside the existing Webview. Bridge typed text/tool messages through a separate dedicated browser profile and return tool calls to the host for execution and approval.
+- Reuse successful browser sessions, serialize requests and isolate each turn in a fresh web conversation. Preserve user/System instructions, schemas and the latest tool exchange during compaction; reference exact repeated user text without dropping unique instructions. Use a separately configurable 60,000-character default and approximate token counts in matching units.
+- Document actual compact read/edit Agent verification in VS Code 1.147.0: five user turns in one Copilot Chat, a reproduced turn-three failure at 48,000 characters and successful continuation at 60,000. Retain explicit limits for full-tool Agents, accumulated context, web-history retention and response-completion-only delivery.
+- Recommend a new Chat first for required-context overflow. Describe only the compaction methods actually applied, and avoid interrupting model requests for Webview-only setting changes. Add regression coverage for policy accuracy, preserved intermediate restrictions and configuration scope.
+- Add editor selection explanation/review/edit commands and diagnostic quick fixes. Capture the document/version/range and force review for proposed edits without replacing the next sidebar request's draft or approval settings.
+- Add explicitly selected, lookup-oriented MCP tools through VS Code's tools API, with per-call approval even under automatic approval. Preserve host trust/authentication and separate server effects from file diff/undo; name filtering is not a read-only guarantee.
+- Add ranked code search, scoped literal search and larger bounded discovery with nested ignores, generated/secret/link exclusions, refreshed memory indexes and explicit incomplete-coverage reporting. Extend paged reads and exact partial edits for large files.
+- Keep model diagnostics limited to counts, phases and error codes. Reject browser profiles/test outputs/credential paths during packaging and include all new runtime modules and the compact Agent example.
+- Make README, installation instructions and release notes English by default. Preserve optional Korean README/installation guides and keep the existing Korean extension UI.
+
 ## 0.13.3
 
 - Advertise `run_command` in the Agent tool list, explain that JSON calls execute in the VS Code host, and provide a command request example. Keep command tools/examples out of read-only prompts and leave approval enforcement in the host.

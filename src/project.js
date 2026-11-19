@@ -1,29 +1,27 @@
 'use strict';
-const path = require('node:path');
+const { rankFiles } = require('./search');
 
-function rankFiles(files, task) {
-  const tokens = task.toLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) || [];
-  const source = /\.(?:[cm]?[jt]sx?|py|cs|java|kt|go|rs|rb|php|vue|svelte|cpp|c|h|swift|html|css|scss)$/i;
-  const score = (file) => {
-    const name = file.toLowerCase(),
-      base = path.posix.basename(name);
-    let value = source.test(name) ? 30 : 0;
-    if (/^(package\.json|pyproject\.toml|cargo\.toml|go\.mod|pom\.xml|readme(?:\.md)?|.*\.sln)$/.test(base))
-      value += 25;
-    if (/(^|\/)(src|app|lib|server|client)\//.test(name)) value += 20;
-    if (/^(index|main|app|program|startup|extension)\./.test(base)) value += 20;
-    if (/(^|\/)(dist|build|coverage|vendor|bin|obj|\.test-output)\//.test(name)) value -= 100;
-    for (const token of tokens) if (name.includes(token)) value += 40;
-    return value;
-  };
-  return [...files].sort((a, b) => score(b) - score(a) || a.localeCompare(b));
-}
-
-async function inspectProject(store, task, maxCharacters = 12000, emit, cancelled = () => false) {
+async function inspectProject(store, task, maxCharacters = 12000, emit, cancelled = () => false, paths) {
   const id = 'project-scan';
   emit({ type: 'tool', id, label: '프로젝트 파일 탐색', state: 'running' });
-  const listing = await store.listFiles(1000);
-  const ranked = rankFiles(listing.files, task);
+  const listing = store.discoverFiles
+    ? await store.discoverFiles({ paths, cancelled })
+    : await store.listFiles(1000);
+  let retrieval;
+  if (store.searchCode && listing.files.length) {
+    emit({ type: 'tool', id: 'project-search', label: '관련 코드 검색', state: 'running' });
+    retrieval = await store.searchCode(task, undefined, cancelled, listing);
+    emit({
+      type: 'tool',
+      id: 'project-search',
+      label: '관련 코드 검색',
+      state: 'done',
+      detail: `${retrieval.indexedFiles}개 파일 색인 · 관련 파일 ${retrieval.matches.length}개${retrieval.truncated ? ' · 검색 범위 일부' : ''}`,
+    });
+  }
+  const ranked = [
+    ...new Set([...(retrieval?.matches.map((match) => match.path) || []), ...rankFiles(listing.files, task)]),
+  ];
   const observations = [];
   let remaining = Math.max(1000, Math.min(6000, Math.floor(maxCharacters * 0.4)));
   const initialReads = Math.max(1, Math.min(4, Math.floor(maxCharacters / 6000)));
@@ -32,13 +30,18 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
     if (remaining < 300 || observations.filter((item) => item.result).length >= initialReads) break;
     emit({ type: 'tool', id: 'project:' + file, label: 'read_file · ' + file, state: 'running' });
     try {
+      const match = retrieval?.matches.find((match) => match.path === file);
       const result = await store.readFile(file, {
-        startLine: 1,
+        startLine: match?.column > 1 ? match.line : Math.max(1, (match?.line || 1) - 3),
+        startColumn: match?.column > 1 ? match.column : 1,
         lineCount: 60,
         maxCharacters: Math.min(1800, remaining),
       });
       remaining -= JSON.stringify(result).length;
-      observations.push({ call: { name: 'read_file', path: file }, result });
+      observations.push({
+        call: { name: 'read_file', path: file, startLine: result.startLine, startColumn: result.startColumn },
+        result,
+      });
       emit({
         type: 'tool',
         id: 'project:' + file,
@@ -82,8 +85,19 @@ async function inspectProject(store, task, maxCharacters = 12000, emit, cancelle
   return {
     files: {
       files: ranked.slice(0, 250),
+      ...(paths ? { scope: paths } : {}),
       directories: listing.directories || [],
       truncated: listing.truncated || ranked.length > 250,
+      ...(retrieval
+        ? {
+            searchCoverage: {
+              indexedFiles: retrieval.indexedFiles,
+              skippedFiles: retrieval.skippedFiles,
+              incomplete: retrieval.truncated,
+              reasons: retrieval.reasons,
+            },
+          }
+        : {}),
     },
     history: {
       kind: 'tool_results',

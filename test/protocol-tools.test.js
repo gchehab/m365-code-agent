@@ -8,6 +8,7 @@ const { buildPrompt, parseReply } = require('../src/protocol');
 const { CodingAgent } = require('../src/agent');
 const { WorkspaceStore } = require('../src/workspace');
 const { ChangeController } = require('../src/changes');
+const { CommandRunner, commandEnvironment } = require('../src/terminal');
 
 test('advertised command requests reach host approval and return actual host outcomes', async (t) => {
   for (const accepted of [true, false]) {
@@ -57,6 +58,7 @@ test('advertised command requests reach host approval and return actual host out
               return parseReply(JSON.stringify(example), requestId);
             }
             const data = JSON.parse(prompt.split('DATA: ')[1]);
+            assert.deepEqual(data.environment, commandEnvironment(root));
             const observation = data.history.findLast((entry) => entry.kind === 'tool_results')
               .observations[0];
             assert.equal(observation.call.name, 'run_command');
@@ -91,6 +93,59 @@ test('advertised command requests reach host approval and return actual host out
         await running.catch(() => {});
       }
     });
+  }
+});
+
+test('advertised shell syntax executes in the advertised directory and returns real results', async (t) => {
+  const temp = await fs.realpath(os.tmpdir());
+  const root = await fs.mkdtemp(path.join(temp, 'm365 shell protocol-'));
+  t.after(async () => {
+    assert.equal(path.dirname(root), temp);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const store = await new WorkspaceStore(root).initialize();
+  const runner = new CommandRunner();
+  t.after(() => runner.stop());
+  let rounds = 0;
+  const agent = new CodingAgent({
+    store,
+    emit() {},
+    runCommand: command => runner.run(command, root),
+    transport: {
+      async request(prompt) {
+        const data = JSON.parse(prompt.split('DATA: ')[1]);
+        assert.deepEqual(data.environment, commandEnvironment(root));
+        assert.match(prompt, /background process, not the VS Code terminal/);
+        if (++rounds === 1) {
+          const node = '"' + process.execPath + '"';
+          const inspect = `${node} -e "console.log(JSON.stringify({cwd:process.cwd(),probe:process.env.M365_AGENT_EXECUTION_PROBE}));process.exit(7)"`;
+          return { kind: 'tools', calls: [{ name: 'run_command', command:
+            data.environment.platform === 'win32'
+              ? `set M365_AGENT_EXECUTION_PROBE=shell-ok&& ${inspect}`
+              : `M365_AGENT_EXECUTION_PROBE=shell-ok ${inspect}` }] };
+        }
+        const observation = data.history.findLast(entry => entry.kind === 'tool_results').observations[0];
+        assert.equal(observation.result.exitCode, 7);
+        assert.deepEqual(JSON.parse(observation.result.output.trim()), { cwd: root, probe: 'shell-ok' });
+        return { kind: 'done', message: '실제 실행 환경 확인' };
+      },
+    },
+  });
+  assert.equal((await agent.run('현재 셸과 작업 폴더에서 명령을 검증해줘.')).status, 'done');
+  assert.equal(rounds, 2);
+});
+
+test('execution environment survives context reduction without advertising a command in read-only modes', () => {
+  const environment = commandEnvironment(process.cwd());
+  const options = { id: 'shell-budget', task: 'Run the tests.', workspace: 'demo', environment,
+    maxCharacters: 4000, history: [{ role: 'assistant', text: 'x'.repeat(10000) }] };
+  const prompt = buildPrompt(options);
+  assert.ok(prompt.length <= options.maxCharacters);
+  assert.deepEqual(JSON.parse(prompt.split('DATA: ')[1]).environment, environment);
+  for (const mode of ['ask', 'plan']) {
+    const readOnly = buildPrompt({ ...options, mode });
+    assert.equal(JSON.parse(readOnly.split('DATA: ')[1]).environment, undefined);
+    assert.doesNotMatch(readOnly.split('DATA: ')[0], /run_command|Command request:/);
   }
 });
 
