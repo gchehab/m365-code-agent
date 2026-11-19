@@ -13,6 +13,7 @@ const ptBR = require('./locales/pt-BR');
  *   htmlLang?: string,
  *   browserLocale?: string,
  *   dateLocale?: string,
+ *   webUi?: Record<string, string[]>,
  *   ui?: Record<string, string>,
  *   messages?: Record<string, string>
  * }} LanguagePackInput
@@ -25,6 +26,7 @@ const ptBR = require('./locales/pt-BR');
  *   htmlLang: string,
  *   browserLocale: string,
  *   dateLocale: string,
+ *   webUi: Record<string, string[]>,
  *   ui: Record<string, string>,
  *   messages: Record<string, string>
  * }} LanguagePack
@@ -55,6 +57,7 @@ function registerLanguagePack(pack) {
       typeof pack.dateLocale === 'string' && pack.dateLocale.trim()
         ? pack.dateLocale.trim()
         : canonicalCode,
+    webUi: { ...en.webUi, ...(pack.webUi || {}) },
     ui: { ...en.ui, ...(pack.ui || {}) },
     messages: { ...en.messages, ...(pack.messages || {}) },
   });
@@ -164,6 +167,37 @@ function ui(key, params, code) {
   return formatTemplate(template, params);
 }
 
+/** @param {string} value */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Builds a case-insensitive RegExp combining localized web UI control labels
+ * across all registered language packs, prioritizing the active language pack first.
+ * @param {string} key
+ * @param {string} [suffixPattern]
+ * @returns {RegExp}
+ */
+function getWebUiPattern(key, suffixPattern = '(?:\\s*[\\(\\-–—:].*)?') {
+  const active = getLanguagePack();
+  const orderedPacks = [active, ...[...packs.values()].filter((pack) => pack.code !== active.code)];
+  const terms = [];
+  const seen = new Set();
+  for (const pack of orderedPacks) {
+    const list = pack.webUi?.[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof item !== 'string' || !item.trim()) continue;
+      const normalized = item.trim().toLowerCase();
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      terms.push(escapeRegExp(item.trim()));
+    }
+  }
+  return new RegExp(`^(?:${terms.join('|')})${suffixPattern}$`, 'i');
+}
+
 module.exports = {
   DEFAULT_LANGUAGE,
   registerLanguagePack,
@@ -172,6 +206,7 @@ module.exports = {
   setLanguage,
   getAvailableLanguages,
   getLanguagePack,
+  getWebUiPattern,
   t,
   ui,
 };

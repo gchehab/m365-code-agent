@@ -95,6 +95,7 @@ class AgentView {
       }
     }
     this.broadcastLanguage();
+    await this.browser?.setLocale?.(getLanguagePack(resolved).browserLocale);
     this.post({
       type: 'status',
       text: t('statusLanguageChanged', { language: getLanguagePack(resolved).label }),

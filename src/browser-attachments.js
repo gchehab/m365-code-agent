@@ -1,7 +1,7 @@
 'use strict';
 /* global getComputedStyle */
 const { createHash } = require('node:crypto');
-const { t } = require('./i18n');
+const { t, getWebUiPattern } = require('./i18n');
 
 // This function runs in the composer frame. Only composer-local attachment
 // cards count; previously submitted files in the conversation are excluded.
@@ -46,7 +46,7 @@ function attachmentSnapshot(element, selectors) {
       .join(' '),
   );
   const failure =
-    /\b(error|failed|failure|unable|unsupported|rejected|denied|blocked|cannot|exceeded)\b|too (?:large|big)|not supported|not allowed|went wrong|could not|can't|couldn't|오류|실패|업로드할 수 없|첨부할 수 없|문제가 (?:발생|있)|지원되지|지원하지|허용되지|차단|크기.{0,20}초과|제한.{0,15}초과|너무 (?:크|큰)|권한.{0,20}없/i;
+    /\b(error|failed|failure|unable|unsupported|rejected|denied|blocked|cannot|exceeded|erro|falha|falhou|recusado|negado|bloqueado)\b|too (?:large|big)|not supported|not allowed|went wrong|could not|can't|couldn't|não foi possível|não é possível|não suportado|não permitido|algo deu errado|muito grande|limite excedido|tamanho excedido|오류|실패|업로드할 수 없|첨부할 수 없|문제가 (?:발생|있)|지원되지|지원하지|허용되지|차단|크기.{0,20}초과|제한.{0,15}초과|너무 (?:크|큰)|권한.{0,20}없/i;
   const explicitError =
     '[data-testid*="upload-error"], [data-testid*="attachment-error"], [data-status="error"], [data-state="error"], [data-status="failed"]';
   const errors = [...scope.querySelectorAll(selectors.error)]
@@ -143,8 +143,7 @@ async function findInput(browser, frame, files) {
 async function openUpload(browser, frame, files) {
   const direct = await findInput(browser, frame, files);
   if (direct) return direct;
-  const names =
-    /^(attach(?: files?| images?)?|add (?:content|files?|images?|photos?|attachments?)|upload(?: files?| images?| photos?)?|파일 첨부|이미지 첨부|첨부|파일 추가|이미지 추가|사진 추가|콘텐츠 추가|업로드|파일 업로드|이미지 업로드|로컬 파일 업로드|Upload from this device|Upload from computer|이 장치에서 업로드|내 컴퓨터에서 업로드)(?:\s.*)?$/i;
+  const names = getWebUiPattern('attach', '(?:\\s.*)?');
   let opened = false;
   const clickedLabels = new Set();
   for (let step = 0; step < 3; step++) {

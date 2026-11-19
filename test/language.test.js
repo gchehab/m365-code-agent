@@ -10,6 +10,7 @@ const {
   getAvailableLanguages,
   getLanguagePack,
   registerLanguagePack,
+  getWebUiPattern,
   t,
   ui,
 } = require('../src/i18n');
@@ -168,4 +169,46 @@ test('custom partial language packs inherit missing keys from the default Englis
   assert.equal(pack.ui.connect, 'Custom Connect');
   assert.equal(pack.ui.attachLocal, enPack.ui.attachLocal);
   assert.equal(pack.messages.errTaskStopped, enPack.messages.errTaskStopped);
+});
+
+test('Copilot web UI control patterns match English, Korean, and Brazilian Portuguese labels regardless of active plugin language', (ctx) => {
+  ctx.after(() => setLanguage('en'));
+  for (const activeLang of ['en', 'ko', 'pt-BR']) {
+    setLanguage(activeLang);
+    const newChatPattern = getWebUiPattern('newChat');
+    for (const label of [
+      'New chat',
+      'New conversation',
+      'New chat (Ctrl+Shift+O)',
+      'Novo chat',
+      'Nova conversa',
+      'Iniciar novo chat',
+      'Novo chat (Alt+Shift+N)',
+      '새 채팅',
+      '새 대화',
+    ]) {
+      assert.match(label, newChatPattern);
+    }
+
+    const sendPattern = getWebUiPattern('send', '(\\s*\\(.*\\))?');
+    for (const label of ['Send', 'Send message', 'Enviar', 'Enviar mensagem', '보내기', '전송']) {
+      assert.match(label, sendPattern);
+    }
+
+    const stopPattern = getWebUiPattern('stop', '(\\s*\\(.*\\))?');
+    for (const label of ['Stop generating', 'Parar de gerar', 'Interromper geração', '응답 중지']) {
+      assert.match(label, stopPattern);
+    }
+
+    const attachPattern = getWebUiPattern('attach', '(?:\\s.*)?');
+    for (const label of [
+      'Attach files',
+      'Upload from this device',
+      'Anexar arquivos',
+      'Carregar deste dispositivo',
+      '파일 첨부',
+    ]) {
+      assert.match(label, attachPattern);
+    }
+  }
 });

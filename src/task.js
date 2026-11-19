@@ -33,18 +33,18 @@ function resolveTask(task) {
         'Inspect the project test setup, run the tests and report the actual results.',
     };
   const noChanges =
-    /수정하지|변경하지|변경 없이|수정 없이|읽기\s*전용|do not (?:edit|change|modify)|read[ -]only/i.test(
+    /수정하지|변경하지|변경 없이|수정 없이|읽기\s*전용|do not (?:edit|change|modify)|read[ -]only|não (?:edite|altere|modifique)|somente leitura/i.test(
       task,
     );
   const explicitAction =
-    /(?:수정|변경|구현|추가|생성|작성|적용|업데이트|리팩토링|리팩터링|개선|정리)(?:해|하[고여]|해\s*주)|고쳐|바꿔|넣어|실행해|돌려|^(?:please\s+)?(?:fix|edit|update|add|create|implement|refactor|run)\b|\b(?:and|then)\s+(?:fix|edit|update|add|create|implement|refactor|run)\b/i.test(
+    /(?:수정|변경|구현|추가|생성|작성|적용|업데이트|리팩토링|리팩터링|개선|정리)(?:해|하[고여]|해\s*주)|고쳐|바꿔|넣어|실행해|돌려|^(?:please\s+|por favor\s+)?(?:fix|edit|update|add|create|implement|refactor|run|corrija|edite|atualize|adicione|crie|implemente|refatore|execute)\b|\b(?:and|then|e|depois)\s+(?:fix|edit|update|add|create|implement|refactor|run|corrija|edite|atualize|adicione|crie|implemente|refatore|execute)\b/i.test(
       task,
     );
   const question =
-    /설명|알려|분석해|검토해|검토하고|어떻게|왜\s|무엇|뭐야|[?？]\s*$|\b(?:explain|analy[sz]e|review|how|why|what)\b/i.test(
+    /설명|알려|분석해|검토해|검토하고|어떻게|왜\s|무엇|뭐야|[?？]\s*$|\b(?:explain|analy[sz]e|review|how|why|what|explique|analise|revise|como|por que|o que)\b/i.test(
       task,
     );
-  const plan = /계획|\bplan\b/i.test(task);
+  const plan = /계획|\b(?:plan|plano|planeje)\b/i.test(task);
   return {
     task,
     mode: noChanges || (!explicitAction && (question || plan)) ? (plan ? 'plan' : 'ask') : 'agent',

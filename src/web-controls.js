@@ -4,7 +4,7 @@ const { inspectControls } = require('./controls');
 const { t } = require('./i18n');
 
 const modelName =
-  /\b(auto|smart|gpt|claude|openai|anthropic|gemini|quick response|think deeper|reasoning)\b|자동|스마트|빠른 응답|심층|추론|깊이/i;
+  /\b(auto|smart|gpt|claude|openai|anthropic|gemini|quick response|think deeper|reasoning)\b|자동|스마트|빠른 응답|심층|추론|깊이|automático|inteligente|resposta rápida|pensar mais fundo|pensamento profundo|raciocínio/i;
 async function trigger(browser) {
   for (const frame of browser.page.frames()) {
     if (browser.options.modelButtonSelector) {
@@ -14,7 +14,7 @@ async function trigger(browser) {
     for (const role of ['combobox', 'button']) {
       for (const button of await frame
         .getByRole(role, {
-          name: /model|모델|응답 방식|response mode|^auto$|^자동$|quick response|think deeper|GPT-|Claude/i,
+          name: /model|모델|응답 방식|response mode|modelo|modo de resposta|^auto$|^자동$|^automático$|quick response|resposta rápida|think deeper|pensar mais fundo|GPT-|Claude/i,
         })
         .all()) {
         if (!(await button.isVisible())) continue;
@@ -31,7 +31,11 @@ async function visibleItems(frame) {
     for (const state of await frame.getByRole(role).evaluateAll(inspectControls)) {
       if (!state.visible || !state.enabled) continue;
       const label = state.label;
-      if (!label || label.length > 160 || (!modelName.test(label) && !/^(more|더 보기|더보기)$/i.test(label)))
+      if (
+        !label ||
+        label.length > 160 ||
+        (!modelName.test(label) && !/^(more|더 보기|더보기|mais|mostrar mais|ver mais)$/i.test(label))
+      )
         continue;
       items.push({ role, label, submenu: ['menu', 'true'].includes(state.popup) });
     }

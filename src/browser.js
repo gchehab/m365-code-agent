@@ -1,6 +1,8 @@
 'use strict';
 const { parseReply, replyIdentity, mergeReplies } = require('./protocol');
 const { createHash } = require('node:crypto');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const {
   normalizeDraft,
   matchesPrompt,
@@ -13,7 +15,39 @@ const { conversationUrl } = require('./web-history');
 const { inspectControls, firstReadyControl, anyReadyControl } = require('./controls');
 const { connectionError } = require('./connection');
 const { prepareAttachments, verifyAttachments } = require('./browser-attachments');
-const { t, getLanguagePack } = require('./i18n');
+const { t, getLanguagePack, getWebUiPattern } = require('./i18n');
+
+function buildAcceptLanguageHeader(locale) {
+  const clean = String(locale || 'en-US').trim() || 'en-US';
+  const primary = clean.split('-')[0];
+  const parts = [clean];
+  if (primary && primary.toLowerCase() !== clean.toLowerCase()) parts.push(`${primary};q=0.9`);
+  if (!/^en(?:-|$)/i.test(clean)) parts.push('en-US;q=0.8', 'en;q=0.7');
+  return parts.join(',');
+}
+
+async function syncProfileLocale(profileDir, locale) {
+  if (!profileDir || typeof profileDir !== 'string') return;
+  try {
+    const clean = String(locale || 'en-US').trim() || 'en-US';
+    const primary = clean.split('-')[0];
+    const acceptLanguages =
+      primary && primary.toLowerCase() !== clean.toLowerCase() ? `${clean},${primary}` : clean;
+    const defaultDir = path.join(profileDir, 'Default');
+    await fs.mkdir(defaultDir, { recursive: true });
+    const prefsPath = path.join(defaultDir, 'Preferences');
+    let prefs = {};
+    try {
+      prefs = JSON.parse(await fs.readFile(prefsPath, 'utf8'));
+    } catch {
+      prefs = {};
+    }
+    prefs.intl = { ...(prefs.intl || {}), accept_languages: acceptLanguages };
+    await fs.writeFile(prefsPath, JSON.stringify(prefs), 'utf8');
+  } catch {
+    /* Non-fatal: launchPersistentContext still passes locale, --lang, and extraHTTPHeaders. */
+  }
+}
 
 const allowedHosts = new Set([
   'm365.cloud.microsoft',
@@ -110,13 +144,19 @@ class CopilotBrowser {
       this.connectionStage = 'url';
       validateCopilotUrl(this.options.url);
       this.connectionStage = 'launch';
+      const activeLocale = this.options.locale || getLanguagePack().browserLocale;
+      await syncProfileLocale(this.options.profile, activeLocale);
       const { chromium } = require('playwright-core');
       const context = await chromium.launchPersistentContext(this.options.profile, {
         channel: this.options.channel || 'msedge',
         headless: Boolean(this.options.embedded),
         viewport: this.options.embedded ? { width: 1100, height: 760 } : null,
         acceptDownloads: false,
-        locale: this.options.locale || getLanguagePack().browserLocale,
+        locale: activeLocale,
+        args: [`--lang=${activeLocale}`, `--accept-lang=${activeLocale}`],
+        extraHTTPHeaders: {
+          'Accept-Language': buildAcceptLanguageHeader(activeLocale),
+        },
       });
       this.context = context;
       context.on('close', () => {
@@ -261,7 +301,7 @@ class CopilotBrowser {
       ? [frame.locator(this.options.sendButtonSelector)]
       : [
           frame.getByRole('button', {
-            name: /^(send|send message|send prompt|submit|submit prompt|보내기|전송|제출|메시지 보내기|메시지 전송|질문 보내기|프롬프트 제출|프롬프트 보내기)(\s*\(.*\))?$/i,
+            name: getWebUiPattern('send', '(\\s*\\(.*\\))?'),
           }),
           frame.locator(
             'button[data-testid="send-button"], button[data-testid="sendButton"], button[data-testid="send-message-button"], button[data-testid="submit-button"], button#submit-button, button#sendMessageButton, button:has([data-icon-name="Send"])',
@@ -426,8 +466,7 @@ class CopilotBrowser {
     return [...texts];
   }
   async generationActive() {
-    const pattern =
-      /^(Stop generating|Stop responding|Stop response|Stop generation|응답 중지|생성 중지|답변 중지|응답 생성 중지|답변 생성 중지)(\s*\(.*\))?$/i;
+    const pattern = getWebUiPattern('stop', '(\\s*\\(.*\\))?');
     for (const frame of this.page.frames()) {
       if (!frame.isDetached() && (await anyReadyControl(frame.getByRole('button', { name: pattern }))))
         return true;
@@ -437,16 +476,31 @@ class CopilotBrowser {
   async newChat() {
     await this.connect();
     await this.protectConversationDraft();
-    const name = /^(새 채팅|새 대화|New chat|New conversation)$/i;
+    const name = getWebUiPattern('newChat');
+    const fallbackSelector =
+      '[data-testid="new-chat-button"], [data-testid="newChatButton"], [data-testid="create-new-chat-button"], [data-testid="chat-new-button"], [data-testid="fab-new-chat"], button[data-automation-id="newChatButton"], a[data-automation-id="newChatButton"], button[title*="Novo chat" i], button[title*="Nova conversa" i], button[title*="New chat" i], button[title*="New conversation" i], button[title*="새 채팅" i], button[title*="새 대화" i], a[title*="Novo chat" i], a[title*="New chat" i]';
+    let sawDisabledButton = false;
     for (const frame of this.page.frames()) {
-      for (const role of ['button', 'link']) {
-        for (const button of await frame.getByRole(role, { name }).all()) {
-          if (await button.isVisible()) {
-            await button.click();
-            return;
-          }
-        }
+      const candidates = [];
+      for (const role of ['button', 'link', 'menuitem']) {
+        candidates.push(...(await frame.getByRole(role, { name }).all()));
       }
+      candidates.push(...(await frame.locator(fallbackSelector).all()));
+      for (const button of candidates) {
+        const [state] = await button
+          .evaluate(inspectControls)
+          .catch(() => [{ visible: false, enabled: false }]);
+        if (!state?.visible) continue;
+        if (state.enabled) {
+          await button.click();
+          return;
+        }
+        sawDisabledButton = true;
+      }
+    }
+    if (sawDisabledButton) {
+      const current = await this.readConversation().catch(() => ({ messages: [] }));
+      if (!current.messages?.length) return;
     }
     throw new Error(t('errNewChatButtonNotFound'));
   }
@@ -666,9 +720,10 @@ class CopilotBrowser {
     this.cancelled = true;
     if (!this.page || this.page.isClosed()) return;
     try {
+      const pattern = getWebUiPattern('stop', '(\\s*\\(.*\\))?');
       for (const frame of this.page.frames()) {
         const buttons = frame.getByRole('button', {
-          name: /^(Stop generating|Stop responding|응답 중지|생성 중지|답변 중지)$/i,
+          name: pattern,
         });
         for (const button of await buttons.all())
           if (await button.isVisible()) {
@@ -678,6 +733,53 @@ class CopilotBrowser {
       }
     } catch {
       /* Local cancellation still prevents applying subsequent results. */
+    }
+  }
+  async setLocale(locale) {
+    const activeLocale = locale || getLanguagePack().browserLocale;
+    const changed = this.options.locale !== activeLocale;
+    this.options.locale = activeLocale;
+    await syncProfileLocale(this.options.profile, activeLocale);
+    if (this.context) {
+      try {
+        await this.context.setExtraHTTPHeaders({
+          'Accept-Language': buildAcceptLanguageHeader(activeLocale),
+        });
+        const primary = activeLocale.split('-')[0];
+        const langs =
+          primary && primary.toLowerCase() !== activeLocale.toLowerCase()
+            ? [activeLocale, primary]
+            : [activeLocale];
+        await this.context.addInitScript((languages) => {
+          try {
+            Object.defineProperty(navigator, 'language', {
+              get: () => languages[0],
+              configurable: true,
+            });
+            Object.defineProperty(navigator, 'languages', {
+              get: () => languages,
+              configurable: true,
+            });
+          } catch {
+            /* Ignore if restricted by page frame. */
+          }
+        }, langs);
+        if (changed && !this.busy && this.page && !this.page.isClosed()) {
+          const generating = await this.generationActive().catch(() => false);
+          let hasDraft = false;
+          try {
+            const composer = await this.getComposer();
+            hasDraft = Boolean((await readComposer(composer.locator)).text.trim());
+          } catch {
+            hasDraft = false;
+          }
+          if (!generating && !hasDraft) {
+            await this.page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          }
+        }
+      } catch {
+        /* Context may already be closing. */
+      }
     }
   }
   conversationInfo() {
