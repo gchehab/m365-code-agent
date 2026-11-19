@@ -7,6 +7,7 @@ const { chromium } = require('playwright-core');
 const { renderWebview } = require('../src/view');
 const { renderResponse, ResponsePanel } = require('../src/response-panel');
 const { decorate } = require('../src/markdown');
+const structuredAnswer = require('./fixtures/structured-answer.json');
 const root = path.resolve(__dirname, '..');
 const theme = ':root{--vscode-foreground:#ddd;--vscode-editor-background:#1e1e1e;--vscode-sideBar-background:#181818;--vscode-input-background:#252526;--vscode-input-foreground:#ddd;--vscode-descriptionForeground:#aaa;--vscode-panel-border:#393939;--vscode-focusBorder:#569cd6;--vscode-button-background:#0078d4;--vscode-button-foreground:#fff;--vscode-button-secondaryBackground:#333;--vscode-button-secondaryForeground:#ddd;--vscode-errorForeground:#f88;--vscode-font-family:Segoe UI,sans-serif;--vscode-editor-font-family:Consolas,monospace;--vscode-textLink-foreground:#79b8ff}';
 const reply = '## 빈 배열 처리\n\n**원인:** 빈 배열에서 평균을 계산하면 `NaN`이 반환됩니다. 입력값을 먼저 확인하도록 수정했습니다.\n\n```javascript\nconst average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;\n```\n\n### 검증 결과\n\n- 빈 배열은 `null`을 반환합니다.\n- 일반 배열은 기존 결과를 유지합니다.\n\n| 입력 | 결과 |\n| --- | --- |\n| `[]` | `null` |\n| `[1, 2, 3]` | `2` |';
@@ -23,6 +24,26 @@ async function fixture(t, html, width = 360, initialState = {}) {
   return { page, host: data => page.evaluate(data => window.dispatchEvent(new MessageEvent('message', { data })), data) };
 }
 const options = { nonce: 'test-nonce', cspSource: 'https://reading.test', resource: name => 'https://reading.test/' + name };
+
+test('structured analysis reads as sections in the real chat and uses the same text for copy and wide view', async t => {
+  const { page, host } = await fixture(t, renderWebview(options));
+  const original = JSON.stringify(structuredAnswer);
+  const answer = decorate({ type: 'message', role: 'assistant', text: original }, '프로젝트 분석');
+  await host(answer);
+  assert.equal(await page.locator('.markdown h2').first().textContent(), '프로젝트 구조');
+  assert.ok((await page.locator('.markdown').textContent()).includes(structuredAnswer.summary));
+  assert.ok(!(await page.locator('.markdown').textContent()).includes('"projectStructure"'));
+  await page.getByRole('button', { name: '답변 복사', exact: true }).click();
+  const copied = await page.evaluate(() => window.sent.find(item => item.type === 'copyCode'));
+  assert.equal(copied.text, answer.text);
+  await page.getByRole('button', { name: '크게 보기', exact: true }).click();
+  const expanded = await page.evaluate(() => window.sent.find(item => item.type === 'openResponse'));
+  assert.equal(expanded.text, answer.text);
+  assert.equal(original, JSON.stringify(structuredAnswer));
+  await fs.mkdir(path.join(root, '.test-output'), { recursive: true });
+  await page.locator('#messages').evaluate(node => { node.scrollTop = 0; });
+  await page.screenshot({ path: path.join(root, '.test-output', 'structured-answer-chat.png') });
+});
 
 test('reading layout groups activity, preserves scroll through sync and provides code/response controls', async t => {
   const { page, host } = await fixture(t, renderWebview(options));

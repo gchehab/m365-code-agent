@@ -11,7 +11,7 @@ const { CommandRunner } = require('./terminal');
 const { renderWebview } = require('./view');
 const { inspectProject } = require('./project');
 const { resolveTask } = require('./task');
-const { decorate } = require('./markdown');
+const { decorate, decorateHistory } = require('./markdown');
 const { mergeHistory } = require('./web-history');
 
 const { ConversationController } = require('./conversations');
@@ -69,7 +69,8 @@ class AgentView {
       this.events = this.events.slice(-100);
       this.saveSession();
     }
-    this.view?.webview.postMessage(decorate(event));
+    const request = this.events.findLast((item) => item.type === 'message' && item.role === 'user')?.text;
+    this.view?.webview.postMessage(decorate(event, request));
     if (event.type === 'status') this.output.appendLine(event.text);
   }
   saveSession() {
@@ -79,7 +80,7 @@ class AgentView {
     return {
       type: 'history',
       sessionId: this.sessionId,
-      events: this.events.map(decorate),
+      events: decorateHistory(this.events),
       running:
         this.starting || this.switchingBrowser || this.sessionSwitching || Boolean(this.agent?.running),
       attachments: this.attachments,

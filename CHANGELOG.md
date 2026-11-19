@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1
+
+- Fix project-analysis answers appearing as raw JSON in the M365 Agent Webview when the model serialized an outcome/summary report inside an otherwise valid completion message. Render recognized report sections as readable Markdown, including when reopening saved history.
+- Preserve stored originals, explicit JSON output requests, fenced examples and unrelated JSON. Keep unknown report fields visible as data and never reinterpret file/tool action envelopes. Copy and wide-view actions use the same displayed answer.
+- Clarify that completion messages and change summaries should be user-facing Markdown prose unless JSON output is explicitly requested. Add regression coverage using the reported analysis object and real Edge Webview rendering/copy/reader behavior.
+
 ## 0.14.0
 
 - Add an optional, disabled-by-default VS Code language model provider, `M365 Web (Experimental)`, alongside the existing Webview. Bridge typed text/tool messages through a separate dedicated browser profile and return tool calls to the host for execution and approval.

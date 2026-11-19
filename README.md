@@ -8,7 +8,7 @@ An independent VS Code coding agent that uses your signed-in Microsoft 365 Copil
 
 This project is not affiliated with, endorsed by, or supported by Microsoft. You need an eligible Microsoft 365 Copilot account and permission to use browser automation in your organization. Successful tests with one account and example projects do not establish compatibility with every tenant, login flow or security policy.
 
-Version **0.14.0** keeps the existing M365 Agent chat and adds an optional VS Code model provider, editor actions, lookup-oriented MCP integration and ranked code search. See the [changelog](CHANGELOG.md).
+Version **0.14.1** fixes structured project-analysis reports appearing as raw JSON in the M365 Agent chat. It includes 0.14.0's optional VS Code model provider, editor actions, lookup-oriented MCP integration and ranked code search alongside the existing chat. See the [changelog](CHANGELOG.md).
 
 ## Authentication and change protection
 
@@ -20,7 +20,7 @@ Code, conversation context and tool results needed for a task are sent to the si
 
 ## Install and connect
 
-1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent), or use **Extensions → … → Install from VSIX…** with `m365-code-agent-0.14.0.vsix` from a [GitHub release](https://github.com/jhoon-dev/m365-code-agent/releases).
+1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jhoon-dev.m365-code-agent), or use **Extensions → … → Install from VSIX…** with `m365-code-agent-0.14.1.vsix` from a [GitHub release](https://github.com/jhoon-dev/m365-code-agent/releases).
 2. Open a local project and the **M365 Agent** view in the secondary sidebar. The command `M365 Agent: 오른쪽에서 열기` opens/restores this view.
 3. Click **연결** (Connect) below the input. The **M365 Copilot 브라우저** editor tab displays the actual automated Edge page.
 4. Complete your company login and MFA yourself, then open the Copilot chat page. Use **외부 브라우저로 전환** (Switch to external browser) if native authentication windows are needed.
@@ -96,6 +96,8 @@ Closing the browser editor does not stop automation. Use **⋯ → Copilot 브�
 The browser view is not an iframe or the experimental BrowserTab API. Frames stay in memory; it does not save screen files, extract cookies/tokens or change web security headers. Capture pauses when hidden, and displayed URLs omit authentication query/fragment data.
 
 Answers support Markdown, code copying and adjustable 12–18px text/wrapping. **크게 보기** opens a reusable read-only answer editor without creating project files. Tool/system activity collapses into groups, failed tools expand and review cards remain visible. New events preserve scroll while reading an older answer. HTML and remote images in answers are not executed/loaded.
+
+Recognized outcome/summary project-report objects embedded in answer text are displayed as readable sections rather than raw JSON, including in saved history. Stored originals remain unchanged; explicit JSON output requests and fenced examples retain their format. Copy and the wide reader use the same displayed text. This is presentation only and never executes report fields as file/tool actions.
 
 ## File changes, approval and commands
 
